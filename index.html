@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>ZOMBIE SHOOTER - よくある広告のやつ</title>
+<title>GATE SHOOTER - よくある広告のやつ</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -32,6 +32,7 @@
     color: #fff;
     text-align: center;
     z-index: 10;
+    padding: 20px;
   }
   .overlay.hidden { display: none; }
   .overlay h1 {
@@ -41,7 +42,7 @@
     text-shadow: 0 0 24px rgba(255,71,87,.6);
     margin-bottom: 12px;
   }
-  .overlay p { font-size: clamp(14px, 3.5vw, 20px); color: #ccc; margin: 6px 0; }
+  .overlay p { font-size: clamp(13px, 3.4vw, 19px); color: #ccc; margin: 5px 0; }
   .overlay .score-big { font-size: clamp(24px, 6vw, 44px); color: #ffd32a; margin: 10px 0; }
   .overlay button {
     margin-top: 24px;
@@ -56,8 +57,6 @@
     transition: transform .08s;
   }
   .overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #a3122a; }
-  .blink { animation: blink 1.2s infinite; }
-  @keyframes blink { 50% { opacity: .3; } }
 </style>
 </head>
 <body>
@@ -65,16 +64,18 @@
   <canvas id="game"></canvas>
 
   <div id="start-screen" class="overlay">
-    <h1>🧟 ZOMBIE SHOOTER</h1>
-    <p>上から迫りくるゾンビを撃ちまくれ！</p>
+    <h1>🧟 GATE SHOOTER</h1>
+    <p>迫りくるゾンビの大群を撃ちまくれ！</p>
+    <p>🚪 <b>×2 / ×3 / +10</b> のゲートをくぐると自軍が増殖！</p>
+    <p>🔫 マイナスゲートは撃ちまくればプラスに変わる！</p>
+    <p>📦 宝箱を撃って壊すとパワーアップ！</p>
     <p>操作：マウス / タッチ / ←→キー（射撃は自動）</p>
-    <p>💊 を取るとパワーアップ</p>
     <button id="start-btn">▶ ゲームスタート</button>
   </div>
 
   <div id="gameover-screen" class="overlay hidden">
     <h1>GAME OVER</h1>
-    <p>スコア</p>
+    <p>全滅…！スコア</p>
     <div class="score-big" id="final-score">0</div>
     <p id="best-score-label"></p>
     <button id="retry-btn">🔄 もう一度</button>
@@ -101,29 +102,52 @@
   window.addEventListener("resize", resize);
   resize();
 
+  // ---- 定数 ----
+  const MAX_SQUAD = 60;      // 兵士数の上限
+  const FIRE_STREAMS = 22;   // 同時発射ストリーム上限（超過分はダメージに換算）
+  const MAX_BULLETS = 350;
+  const MAX_ENEMIES = 130;
+  const SQUAD_Y = H - 150;   // 隊列の先頭位置
+
   // ---- 状態 ----
   const STATE = { TITLE: 0, PLAYING: 1, GAMEOVER: 2 };
   let state = STATE.TITLE;
 
-  let player, bullets, enemies, particles, powerups, floatTexts;
-  let score, wave, killCount, spawnTimer, waveTimer, shake, lastTime;
-  let best = Number(localStorage.getItem("zs_best") || 0);
+  let leaderX, targetX, squadCount, bulletDmg, fireRate, spreadTime, rapidTime;
+  let bullets, enemies, gates, crates, particles, floatTexts;
+  let gunnerPos = [];        // 毎フレーム再計算する隊列の座標
+  let score, wave, killCount;
+  let fireAcc, fireIdx, muzzles;
+  let spawnTimer, hordeTimer, gateTimer, crateTimer, waveTimer, shake, flash, lastTime;
+  let best = Number(localStorage.getItem("gs_best") || 0);
+
+  // ---- 隊列オフセット（先頭1人 + 後ろに広がる隊形）----
+  const OFFSETS = [{ x: 0, y: 0 }];
+  {
+    const widths = [4, 6, 8, 9];
+    let row = 1;
+    while (OFFSETS.length < MAX_SQUAD) {
+      const k = widths[Math.min(row - 1, widths.length - 1)];
+      for (let i = 0; i < k && OFFSETS.length < MAX_SQUAD; i++) {
+        const jx = Math.sin((OFFSETS.length + 1) * 999) * 5;   // 決定的なゆらぎ
+        const jy = Math.sin((OFFSETS.length + 1) * 777) * 4;
+        OFFSETS.push({ x: (i - (k - 1) / 2) * 26 + jx, y: row * 27 + jy });
+      }
+      row++;
+    }
+  }
 
   function reset() {
-    player = {
-      x: W / 2, y: H - 80,
-      w: 44, h: 52,
-      speed: 420,
-      fireRate: 0.16,   // 秒/発
-      fireTimer: 0,
-      spread: 1,        // 同時弾数
-      powerTime: 0,     // パワーアップ残り秒
-      targetX: W / 2,
-    };
-    bullets = []; enemies = []; particles = []; powerups = []; floatTexts = [];
+    leaderX = W / 2; targetX = W / 2;
+    squadCount = 3;
+    bulletDmg = 1;
+    fireRate = 0.5;          // 1人あたり 秒/発
+    spreadTime = 0; rapidTime = 0;
+    bullets = []; enemies = []; gates = []; crates = []; particles = []; floatTexts = [];
     score = 0; wave = 1; killCount = 0;
-    spawnTimer = 0.5; waveTimer = 0;
-    shake = 0;
+    fireAcc = 0; fireIdx = 0; muzzles = [];
+    spawnTimer = 0.6; hordeTimer = 6; gateTimer = 3.5; crateTimer = 6; waveTimer = 0;
+    shake = 0; flash = 0;
   }
 
   // ---- 入力 ----
@@ -131,15 +155,14 @@
   window.addEventListener("keydown", e => { keys[e.key] = true; });
   window.addEventListener("keyup",   e => { keys[e.key] = false; });
 
-  let pointerActive = false;
   function pointerX(e) {
     const rect = canvas.getBoundingClientRect();
     const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
     return cx / rect.width * W;
   }
-  canvas.addEventListener("mousemove", e => { player && (player.targetX = pointerX(e)); pointerActive = true; });
-  canvas.addEventListener("touchstart", e => { e.preventDefault(); player && (player.targetX = pointerX(e)); pointerActive = true; }, { passive: false });
-  canvas.addEventListener("touchmove",  e => { e.preventDefault(); player && (player.targetX = pointerX(e)); pointerActive = true; }, { passive: false });
+  canvas.addEventListener("mousemove", e => { targetX = pointerX(e); });
+  canvas.addEventListener("touchstart", e => { e.preventDefault(); targetX = pointerX(e); }, { passive: false });
+  canvas.addEventListener("touchmove",  e => { e.preventDefault(); targetX = pointerX(e); }, { passive: false });
 
   // ---- サウンド（WebAudioでピコピコ） ----
   let audioCtx = null;
@@ -156,28 +179,170 @@
   }
 
   // ---- 敵 ----
-  // type: normal(小ゾンビ) / fast(走るゾンビ) / tank(デカブツ)
-  function spawnEnemy() {
+  function spawnEnemy(x, y) {
+    if (enemies.length >= MAX_ENEMIES) return;
     const r = Math.random();
-    const difficulty = 1 + (wave - 1) * 0.15;
     let e;
-    if (r < 0.12 + wave * 0.01 && wave >= 3) {
-      e = { type: "tank", w: 76, h: 84, hp: 14 + wave * 3, speed: 26 + wave * 1.5, score: 500, color: "#8e44ad" };
+    if (r < 0.06 + wave * 0.008 && wave >= 3) {
+      e = { type: "tank", w: 76, h: 84, hp: 20 + wave * 6, speed: 26 + wave * 1.5, score: 500, cost: 10, color: "#8e44ad" };
     } else if (r < 0.35 && wave >= 2) {
-      e = { type: "fast", w: 34, h: 42, hp: 2, speed: (95 + wave * 6), score: 150, color: "#e67e22" };
+      e = { type: "fast", w: 32, h: 40, hp: 2 + Math.floor(wave * 0.5), speed: 100 + wave * 6, score: 150, cost: 1, color: "#e67e22" };
     } else {
-      e = { type: "normal", w: 42, h: 50, hp: 3 + Math.floor(wave / 3), speed: (48 + wave * 4), color: "#2ecc71", score: 100 };
+      e = { type: "normal", w: 40, h: 48, hp: 3 + wave, speed: 50 + wave * 4, score: 100, cost: 2, color: "#2ecc71" };
     }
     e.speed *= 0.9 + Math.random() * 0.25;
     e.maxHp = e.hp;
-    e.x = 30 + Math.random() * (W - 60);
-    e.y = -e.h;
+    e.x = x !== undefined ? x : 30 + Math.random() * (W - 60);
+    e.y = y !== undefined ? y : -e.h;
     e.wobblePhase = Math.random() * Math.PI * 2;
     e.wobbleAmp = e.type === "tank" ? 6 : 16;
     e.hitFlash = 0;
     enemies.push(e);
   }
 
+  function spawnHorde() {
+    const n = Math.min(6 + wave * 2, 26);
+    const cx = 80 + Math.random() * (W - 160);
+    for (let i = 0; i < n; i++) {
+      spawnEnemy(
+        Math.max(20, Math.min(W - 20, cx + (Math.random() - 0.5) * 200)),
+        -50 - Math.random() * 220
+      );
+    }
+    addFloatText(W / 2, 130, "⚠ 大群接近！", "#ff6b81", 26);
+    beep(220, 0.25, "sawtooth", 0.07);
+  }
+
+  // ---- ゲート ----
+  // kind: mult(×N) / plus(+N, マイナスも同じkindで負値) / div2(÷2) / dmg(武器強化)
+  function gateSpec(kind, value) {
+    return { kind, value, hits: 0 };
+  }
+  function randomGoodGate(strong) {
+    const r = Math.random();
+    if (strong && r < 0.25) return gateSpec("mult", 3);
+    if (r < 0.45) return gateSpec("mult", 2);
+    if (r < 0.85) return gateSpec("plus", 5 + Math.floor(Math.random() * 10));
+    return gateSpec("dmg", 1);
+  }
+  function randomBadGate() {
+    return Math.random() < 0.5
+      ? gateSpec("plus", -(10 + Math.floor(Math.random() * 20)))   // マイナスゲート
+      : gateSpec("div2", 2);
+  }
+  let gatePairSeq = 0;
+  function spawnGatePair() {
+    const pairId = ++gatePairSeq;
+    // 7割で「良い vs 悪い」、3割で「良い vs もっと良い」
+    let a, b;
+    if (Math.random() < 0.7) { a = randomGoodGate(false); b = randomBadGate(); }
+    else { a = randomGoodGate(true); b = randomGoodGate(false); }
+    if (Math.random() < 0.5) [a, b] = [b, a];
+    const h = 62, speed = 100 + wave * 3;
+    const gw = W / 2 - 14;
+    gates.push({ ...a, pairId, x: 8,           w: gw, y: -h, h, vy: speed });
+    gates.push({ ...b, pairId, x: W / 2 + 6,   w: gw, y: -h, h, vy: speed });
+  }
+
+  function gateIsGood(g) {
+    if (g.kind === "div2") return false;
+    if (g.kind === "plus") return g.value > 0;
+    return true;
+  }
+  function gateLabel(g) {
+    if (g.kind === "mult") return `×${g.value}`;
+    if (g.kind === "plus") return g.value > 0 ? `+${g.value}` : `${g.value}`;
+    if (g.kind === "div2") return "÷2";
+    return "DMG +1";
+  }
+  // ゲートを撃つと育つ
+  function upgradeGate(g) {
+    g.hits++;
+    if (g.kind === "plus") {
+      const step = g.value < 0 ? 2 : 4;   // マイナスは速めに回復
+      if (g.hits % step === 0) {
+        g.value++;
+        if (g.hits % (step * 3) === 0) beep(700 + g.value * 10, 0.05, "triangle", 0.04);
+      }
+    } else if (g.kind === "mult" && g.value === 2 && g.hits >= 30) {
+      g.value = 3; g.hits = 0;
+      addFloatText(g.x + g.w / 2, g.y + g.h / 2, "×3にパワーアップ！", "#48dbfb", 20);
+      beep(1000, 0.2, "triangle", 0.08);
+    } else if (g.kind === "div2" && g.hits >= 26) {
+      g.kind = "plus"; g.value = 3; g.hits = 0;
+      addFloatText(g.x + g.w / 2, g.y + g.h / 2, "プラスに変化！", "#48dbfb", 20);
+      beep(1000, 0.2, "triangle", 0.08);
+    }
+  }
+  function applyGate(g) {
+    if (g.kind === "mult") {
+      const before = squadCount;
+      squadCount = Math.min(MAX_SQUAD, squadCount * g.value);
+      addFloatText(leaderX, SQUAD_Y - 60, `×${g.value}！ ${before}→${squadCount}人`, "#48dbfb", 26);
+      beep(880, 0.25, "triangle", 0.09);
+    } else if (g.kind === "plus") {
+      squadCount = Math.max(1, Math.min(MAX_SQUAD, squadCount + g.value));
+      const good = g.value > 0;
+      addFloatText(leaderX, SQUAD_Y - 60, `${good ? "+" : ""}${g.value}人！`, good ? "#48dbfb" : "#ff4757", 26);
+      beep(good ? 880 : 150, 0.25, good ? "triangle" : "sawtooth", 0.09);
+      if (!good) shake = Math.min(shake + 8, 14);
+    } else if (g.kind === "div2") {
+      squadCount = Math.max(1, Math.ceil(squadCount / 2));
+      addFloatText(leaderX, SQUAD_Y - 60, `÷2… ${squadCount}人に…`, "#ff4757", 26);
+      beep(150, 0.3, "sawtooth", 0.09);
+      shake = Math.min(shake + 8, 14);
+    } else if (g.kind === "dmg") {
+      bulletDmg++;
+      addFloatText(leaderX, SQUAD_Y - 60, `武器強化！ DMG ${bulletDmg}`, "#ff9ff3", 26);
+      beep(1200, 0.25, "triangle", 0.09);
+    }
+  }
+
+  // ---- 宝箱 ----
+  function spawnCrate() {
+    crates.push({
+      x: 50 + Math.random() * (W - 100),
+      y: -40,
+      vy: 55 + Math.random() * 25,
+      hp: 8 + wave, maxHp: 8 + wave,
+      size: 46,
+      hitFlash: 0,
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+  function openCrate(c) {
+    spawnParticles(c.x, c.y, "#f0932b", 24, 1.2);
+    shake = Math.min(shake + 5, 12);
+    const r = Math.random();
+    if (r < 0.3) {
+      const n = 4 + Math.floor(Math.random() * 8);
+      squadCount = Math.min(MAX_SQUAD, squadCount + n);
+      addFloatText(c.x, c.y, `+${n}人！`, "#48dbfb", 24);
+    } else if (r < 0.45) {
+      bulletDmg++;
+      addFloatText(c.x, c.y, `武器強化！ DMG ${bulletDmg}`, "#ff9ff3", 24);
+    } else if (r < 0.65) {
+      rapidTime = 10;
+      addFloatText(c.x, c.y, "RAPID FIRE！", "#ff9ff3", 24);
+    } else if (r < 0.85) {
+      spreadTime = 10;
+      addFloatText(c.x, c.y, "3WAYショット！", "#ffd32a", 24);
+    } else {
+      // ボム：画面上の敵を一掃
+      flash = 0.35; shake = 16;
+      addFloatText(c.x, c.y, "💣 ボム！！", "#ff6b81", 30);
+      for (const e of enemies) {
+        score += e.score; killCount++;
+        spawnParticles(e.x, e.y, e.color, 10, 1.2);
+      }
+      enemies.length = 0;
+      beep(60, 0.6, "sawtooth", 0.12);
+      return;
+    }
+    beep(1100, 0.2, "triangle", 0.09);
+  }
+
+  // ---- エフェクト ----
   function spawnParticles(x, y, color, n, power = 1) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -192,73 +357,143 @@
       });
     }
   }
-
-  function addFloatText(x, y, text, color = "#ffd32a") {
-    floatTexts.push({ x, y, text, color, life: 0.8 });
+  function addFloatText(x, y, text, color = "#ffd32a", size = 22) {
+    floatTexts.push({ x, y, text, color, size, life: 1.0 });
   }
 
-  function killEnemy(e) {
-    score += e.score;
-    killCount++;
-    spawnParticles(e.x, e.y, e.color, e.type === "tank" ? 30 : 14, e.type === "tank" ? 1.6 : 1);
-    addFloatText(e.x, e.y, `+${e.score}`);
-    shake = Math.min(shake + (e.type === "tank" ? 8 : 2), 12);
-    beep(e.type === "tank" ? 90 : 160, 0.15, "sawtooth", 0.08);
-    // パワーアップドロップ
-    const chance = e.type === "tank" ? 0.7 : 0.06;
-    if (Math.random() < chance) {
-      const kind = Math.random() < 0.5 ? "spread" : "rapid";
-      powerups.push({ x: e.x, y: e.y, kind, vy: 70, size: 16 });
+  function killEnemy(e, giveScore = true) {
+    if (giveScore) { score += e.score; killCount++; addFloatText(e.x, e.y, `+${e.score}`); }
+    spawnParticles(e.x, e.y, e.color, e.type === "tank" ? 26 : 10, e.type === "tank" ? 1.6 : 1);
+    shake = Math.min(shake + (e.type === "tank" ? 8 : 1.5), 12);
+    beep(e.type === "tank" ? 90 : 160, 0.12, "sawtooth", 0.06);
+  }
+
+  function loseSoldiers(n, x, y) {
+    squadCount -= n;
+    addFloatText(x, y, `-${n}人`, "#ff4757", 24);
+    spawnParticles(x, y, "#ff4757", 12, 1.2);
+    shake = Math.min(shake + 6, 14);
+    beep(110, 0.2, "sawtooth", 0.09);
+    if (squadCount <= 0) { squadCount = 0; gameOver(); }
+  }
+
+  // ---- 隊列座標の再計算 ----
+  function updateGunnerPos() {
+    gunnerPos.length = 0;
+    for (let i = 0; i < squadCount; i++) {
+      const o = OFFSETS[i];
+      gunnerPos.push({
+        x: Math.max(14, Math.min(W - 14, leaderX + o.x)),
+        y: SQUAD_Y + o.y,
+      });
     }
   }
 
   // ---- 更新 ----
   function update(dt) {
-    // プレイヤー移動
-    if (keys["ArrowLeft"] || keys["a"])  { player.targetX = player.x - player.speed * dt * 1.5; pointerActive = false; }
-    if (keys["ArrowRight"] || keys["d"]) { player.targetX = player.x + player.speed * dt * 1.5; pointerActive = false; }
-    const dx = player.targetX - player.x;
-    const maxMove = player.speed * dt;
-    player.x += Math.abs(dx) <= maxMove ? dx : Math.sign(dx) * maxMove;
-    player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x));
+    // 移動
+    const speed = 430;
+    if (keys["ArrowLeft"] || keys["a"])  targetX = leaderX - speed * dt * 1.6;
+    if (keys["ArrowRight"] || keys["d"]) targetX = leaderX + speed * dt * 1.6;
+    const dx = targetX - leaderX;
+    const maxMove = speed * dt;
+    leaderX += Math.abs(dx) <= maxMove ? dx : Math.sign(dx) * maxMove;
+    leaderX = Math.max(30, Math.min(W - 30, leaderX));
+    updateGunnerPos();
 
     // パワーアップ時間
-    if (player.powerTime > 0) {
-      player.powerTime -= dt;
-      if (player.powerTime <= 0) { player.spread = 1; player.fireRate = 0.16; }
-    }
+    if (rapidTime > 0) rapidTime -= dt;
+    if (spreadTime > 0) spreadTime -= dt;
+    const curRate = rapidTime > 0 ? 0.22 : fireRate;
 
-    // 自動射撃
-    player.fireTimer -= dt;
-    if (player.fireTimer <= 0) {
-      player.fireTimer = player.fireRate;
-      const n = player.spread;
+    // 自動射撃：全体で 兵士数/レート 発/秒（ストリーム上限超過分はダメージに換算）
+    const streams = Math.min(squadCount, FIRE_STREAMS);
+    const dmgScale = squadCount > FIRE_STREAMS ? squadCount / FIRE_STREAMS : 1;
+    fireAcc += dt * streams / curRate;
+    let fired = 0;
+    while (fireAcc >= 1 && fired < 12) {
+      fireAcc--; fired++;
+      const g = gunnerPos[fireIdx % gunnerPos.length];
+      fireIdx++;
+      const n = spreadTime > 0 ? 3 : 1;
       for (let i = 0; i < n; i++) {
-        const off = n === 1 ? 0 : (i - (n - 1) / 2) * 0.14;
+        const off = n === 1 ? 0 : (i - 1) * 0.16;
         bullets.push({
-          x: player.x, y: player.y - player.h / 2,
-          vx: Math.sin(off) * 700, vy: -Math.cos(off) * 700,
-          r: 4,
+          x: g.x, y: g.y - 26,
+          vx: Math.sin(off) * 760, vy: -Math.cos(off) * 760,
+          r: 4, dmg: bulletDmg * dmgScale,
         });
       }
-      beep(880, 0.04, "square", 0.02);
+      muzzles.push({ x: g.x, y: g.y - 30, life: 0.05 });
+      if (fired === 1) beep(880, 0.03, "square", 0.012);
+    }
+    if (bullets.length > MAX_BULLETS) bullets.splice(0, bullets.length - MAX_BULLETS);
+    for (let i = muzzles.length - 1; i >= 0; i--) {
+      muzzles[i].life -= dt;
+      if (muzzles[i].life <= 0) muzzles.splice(i, 1);
     }
 
-    // 弾
+    // 弾の移動と衝突（ゲート → 宝箱 → 敵 の順に判定）
+    outer:
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       b.x += b.vx * dt; b.y += b.vy * dt;
       if (b.y < -10 || b.x < -10 || b.x > W + 10) { bullets.splice(i, 1); continue; }
+      for (const g of gates) {
+        if (b.x > g.x && b.x < g.x + g.w && b.y > g.y && b.y < g.y + g.h) {
+          upgradeGate(g);
+          spawnParticles(b.x, g.y + g.h, "#dfe6e9", 1, 0.4);
+          bullets.splice(i, 1);
+          continue outer;
+        }
+      }
+      for (let j = crates.length - 1; j >= 0; j--) {
+        const c = crates[j];
+        if (Math.abs(b.x - c.x) < c.size / 2 + b.r && Math.abs(b.y - c.y) < c.size / 2 + b.r) {
+          c.hp -= b.dmg; c.hitFlash = 0.08;
+          spawnParticles(b.x, b.y, "#f0932b", 2, 0.5);
+          bullets.splice(i, 1);
+          if (c.hp <= 0) { openCrate(c); crates.splice(j, 1); }
+          continue outer;
+        }
+      }
       for (let j = enemies.length - 1; j >= 0; j--) {
         const e = enemies[j];
         if (Math.abs(b.x - e.x) < e.w / 2 + b.r && Math.abs(b.y - e.y) < e.h / 2 + b.r) {
-          e.hp--; e.hitFlash = 0.08;
-          spawnParticles(b.x, b.y, "#fffa65", 3, 0.5);
+          e.hp -= b.dmg; e.hitFlash = 0.08;
+          spawnParticles(b.x, b.y, "#fffa65", 2, 0.5);
           bullets.splice(i, 1);
           if (e.hp <= 0) { killEnemy(e); enemies.splice(j, 1); }
-          break;
+          continue outer;
         }
       }
+    }
+
+    // ゲートの移動と通過判定
+    for (let i = gates.length - 1; i >= 0; i--) {
+      const g = gates[i];
+      g.y += g.vy * dt;
+      if (g.y + g.h >= SQUAD_Y - 10) {
+        const pairId = g.pairId;
+        // 先頭がいる側のゲートを適用して、ペアごと消す
+        const hit = gates.filter(x => x.pairId === pairId)
+                         .find(x => leaderX >= x.x && leaderX <= x.x + x.w) || g;
+        applyGate(hit);
+        for (let j = gates.length - 1; j >= 0; j--) {
+          if (gates[j].pairId === pairId) gates.splice(j, 1);
+        }
+        if (state !== STATE.PLAYING) return;
+        break;
+      }
+    }
+
+    // 宝箱
+    for (let i = crates.length - 1; i >= 0; i--) {
+      const c = crates[i];
+      c.y += c.vy * dt;
+      c.phase += dt * 3;
+      if (c.hitFlash > 0) c.hitFlash -= dt;
+      if (c.y > H + 30) crates.splice(i, 1);
     }
 
     // 敵
@@ -269,31 +504,28 @@
       e.x += Math.sin(e.wobblePhase) * e.wobbleAmp * dt;
       e.x = Math.max(e.w / 2, Math.min(W - e.w / 2, e.x));
       if (e.hitFlash > 0) e.hitFlash -= dt;
-      // プレイヤーor画面下端に到達でゲームオーバー
-      const hitPlayer = Math.abs(e.x - player.x) < (e.w + player.w) / 2 - 8 &&
-                        Math.abs(e.y - player.y) < (e.h + player.h) / 2 - 8;
-      if (hitPlayer || e.y - e.h / 2 > H) {
-        gameOver();
-        return;
-      }
-    }
 
-    // パワーアップ
-    for (let i = powerups.length - 1; i >= 0; i--) {
-      const p = powerups[i];
-      p.y += p.vy * dt;
-      if (p.y > H + 20) { powerups.splice(i, 1); continue; }
-      if (Math.abs(p.x - player.x) < 34 && Math.abs(p.y - player.y) < 44) {
-        if (p.kind === "spread") {
-          player.spread = Math.min(player.spread + 2, 5);
-          addFloatText(player.x, player.y - 50, "3WAY!", "#48dbfb");
-        } else {
-          player.fireRate = 0.07;
-          addFloatText(player.x, player.y - 50, "RAPID!", "#ff9ff3");
+      // 隊列に接触 → 兵士が減る
+      if (e.y > SQUAD_Y - 80) {
+        let touched = false;
+        for (const g of gunnerPos) {
+          if (Math.abs(e.x - g.x) < e.w / 2 + 11 && Math.abs(e.y - g.y) < e.h / 2 + 15) {
+            touched = true; break;
+          }
         }
-        player.powerTime = 8;
-        beep(1200, 0.2, "triangle", 0.08);
-        powerups.splice(i, 1);
+        if (touched) {
+          killEnemy(e, false);
+          enemies.splice(i, 1);
+          loseSoldiers(e.cost, e.x, e.y);
+          if (state !== STATE.PLAYING) return;
+          continue;
+        }
+      }
+      // 突破された → 1人減る
+      if (e.y - e.h / 2 > H) {
+        enemies.splice(i, 1);
+        loseSoldiers(1, e.x, H - 40);
+        if (state !== STATE.PLAYING) return;
       }
     }
 
@@ -307,47 +539,61 @@
     }
     for (let i = floatTexts.length - 1; i >= 0; i--) {
       const t = floatTexts[i];
-      t.y -= 50 * dt; t.life -= dt;
+      t.y -= 45 * dt; t.life -= dt;
       if (t.life <= 0) floatTexts.splice(i, 1);
     }
 
-    // スポーン＆ウェーブ進行
+    // スポーン
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
       spawnEnemy();
-      const interval = Math.max(0.18, 1.1 - wave * 0.07);
+      const interval = Math.max(0.13, 0.75 - wave * 0.045);
       spawnTimer = interval * (0.7 + Math.random() * 0.6);
     }
+    hordeTimer -= dt;
+    if (hordeTimer <= 0) {
+      spawnHorde();
+      hordeTimer = Math.max(4, 9 - wave * 0.35) * (0.8 + Math.random() * 0.4);
+    }
+    gateTimer -= dt;
+    if (gateTimer <= 0 && gates.length === 0) {
+      spawnGatePair();
+      gateTimer = 9 + Math.random() * 5;
+    }
+    crateTimer -= dt;
+    if (crateTimer <= 0) {
+      spawnCrate();
+      crateTimer = 6 + Math.random() * 6;
+    }
+
+    // ウェーブ進行
     waveTimer += dt;
-    if (waveTimer >= 15) {
+    if (waveTimer >= 12) {
       waveTimer = 0; wave++;
-      addFloatText(W / 2, H / 2, `WAVE ${wave}`, "#ff6b81");
+      addFloatText(W / 2, H / 2, `WAVE ${wave}`, "#ff6b81", 30);
       beep(440, 0.3, "triangle", 0.06);
     }
 
     if (shake > 0) shake = Math.max(0, shake - dt * 30);
+    if (flash > 0) flash = Math.max(0, flash - dt);
   }
 
   // ---- 描画 ----
   function drawZombie(e) {
     ctx.save();
     ctx.translate(e.x, e.y);
-    if (e.hitFlash > 0) { ctx.filter = "brightness(2.5)"; }
+    if (e.hitFlash > 0) ctx.filter = "brightness(2.5)";
     const w = e.w, h = e.h;
-    // 体
     ctx.fillStyle = e.color;
     ctx.fillRect(-w * 0.35, -h * 0.1, w * 0.7, h * 0.5);
-    // 頭
     ctx.fillStyle = e.type === "tank" ? "#a55eea" : "#55efc4";
     ctx.beginPath();
     ctx.arc(0, -h * 0.25, w * 0.28, 0, Math.PI * 2);
     ctx.fill();
-    // 目（赤く光る）
     ctx.fillStyle = "#ff3838";
     const eye = w * 0.07;
     ctx.fillRect(-w * 0.15, -h * 0.3, eye, eye);
     ctx.fillRect(w * 0.08, -h * 0.3, eye, eye);
-    // 腕（前ならえゾンビポーズ、ゆらゆら）
     ctx.strokeStyle = e.color;
     ctx.lineWidth = Math.max(4, w * 0.12);
     ctx.lineCap = "round";
@@ -356,14 +602,12 @@
     ctx.moveTo(-w * 0.3, 0); ctx.lineTo(-w * 0.55, armY);
     ctx.moveTo(w * 0.3, 0);  ctx.lineTo(w * 0.55, armY);
     ctx.stroke();
-    // 足
     const step = Math.sin(e.wobblePhase * 3) * h * 0.08;
     ctx.beginPath();
     ctx.moveTo(-w * 0.15, h * 0.38); ctx.lineTo(-w * 0.15, h * 0.5 + step);
     ctx.moveTo(w * 0.15, h * 0.38);  ctx.lineTo(w * 0.15, h * 0.5 - step);
     ctx.stroke();
     ctx.filter = "none";
-    // HPバー（ダメージを受けた敵のみ）
     if (e.hp < e.maxHp) {
       const bw = w * 0.9;
       ctx.fillStyle = "rgba(0,0,0,.5)";
@@ -374,40 +618,79 @@
     ctx.restore();
   }
 
-  function drawPlayer() {
-    const p = player;
+  function drawGunner(x, y, isLeader) {
     ctx.save();
-    ctx.translate(p.x, p.y);
-    // パワーアップ中はオーラ
-    if (p.powerTime > 0) {
-      ctx.fillStyle = `rgba(72,219,251,${0.15 + 0.1 * Math.sin(Date.now() / 100)})`;
-      ctx.beginPath(); ctx.arc(0, 0, 42, 0, Math.PI * 2); ctx.fill();
-    }
+    ctx.translate(x, y);
+    const s = isLeader ? 1 : 0.82;
+    ctx.scale(s, s);
     // 体
-    ctx.fillStyle = "#487eb0";
-    ctx.fillRect(-p.w * 0.3, -p.h * 0.1, p.w * 0.6, p.h * 0.45);
+    ctx.fillStyle = isLeader ? "#487eb0" : "#40739e";
+    ctx.fillRect(-13, -5, 26, 22);
     // 頭
     ctx.fillStyle = "#f5cd79";
-    ctx.beginPath(); ctx.arc(0, -p.h * 0.25, p.w * 0.24, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -13, 10, 0, Math.PI * 2); ctx.fill();
     // ヘルメット
     ctx.fillStyle = "#2f3640";
-    ctx.beginPath(); ctx.arc(0, -p.h * 0.28, p.w * 0.26, Math.PI, 0); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -14.5, 11, Math.PI, 0); ctx.fill();
     // 銃
     ctx.fillStyle = "#2f3640";
-    ctx.fillRect(-3, -p.h * 0.7, 6, p.h * 0.35);
-    ctx.fillRect(-8, -p.h * 0.42, 16, 8);
-    // マズルフラッシュ
-    if (p.fireTimer > p.fireRate - 0.05) {
-      ctx.fillStyle = "#fffa65";
-      ctx.beginPath(); ctx.arc(0, -p.h * 0.75, 7 + Math.random() * 4, 0, Math.PI * 2); ctx.fill();
-    }
-    // 足
-    ctx.strokeStyle = "#353b48";
-    ctx.lineWidth = 6; ctx.lineCap = "round";
+    ctx.fillRect(-2.5, -36, 5, 18);
+    ctx.fillRect(-7, -22, 14, 7);
+    ctx.restore();
+  }
+
+  function drawGate(g) {
+    const good = gateIsGood(g);
+    ctx.save();
+    // パネル
+    ctx.fillStyle = good ? "rgba(46,134,222,.32)" : "rgba(255,71,87,.28)";
+    ctx.strokeStyle = good ? "#48dbfb" : "#ff4757";
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(-8, p.h * 0.35); ctx.lineTo(-8, p.h * 0.5);
-    ctx.moveTo(8, p.h * 0.35);  ctx.lineTo(8, p.h * 0.5);
-    ctx.stroke();
+    ctx.roundRect(g.x, g.y, g.w, g.h, 10);
+    ctx.fill(); ctx.stroke();
+    // 柱
+    ctx.fillStyle = good ? "#48dbfb" : "#ff4757";
+    ctx.fillRect(g.x - 3, g.y - 6, 8, g.h + 12);
+    ctx.fillRect(g.x + g.w - 5, g.y - 6, 8, g.h + 12);
+    // ラベル
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "bold 34px sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.shadowColor = good ? "#48dbfb" : "#ff4757";
+    ctx.shadowBlur = 14;
+    ctx.fillText(gateLabel(g), g.x + g.w / 2, g.y + g.h / 2);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  function drawCrate(c) {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(Math.sin(c.phase) * 0.08);
+    if (c.hitFlash > 0) ctx.filter = "brightness(2)";
+    const s = c.size;
+    // 箱
+    ctx.fillStyle = "#b3742f";
+    ctx.fillRect(-s / 2, -s / 2, s, s);
+    ctx.fillStyle = "#8a5a24";
+    ctx.fillRect(-s / 2, -s / 2, s, 6);
+    ctx.fillRect(-s / 2, s / 2 - 6, s, 6);
+    // 金の帯と錠前
+    ctx.fillStyle = "#f9ca24";
+    ctx.fillRect(-4, -s / 2, 8, s);
+    ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#8a5a24";
+    ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.filter = "none";
+    // HPバー
+    if (c.hp < c.maxHp) {
+      ctx.rotate(-Math.sin(c.phase) * 0.08);
+      ctx.fillStyle = "rgba(0,0,0,.5)";
+      ctx.fillRect(-s / 2, -s / 2 - 12, s, 5);
+      ctx.fillStyle = "#f9ca24";
+      ctx.fillRect(-s / 2, -s / 2 - 12, s * Math.max(0, c.hp / c.maxHp), 5);
+    }
     ctx.restore();
   }
 
@@ -431,6 +714,9 @@
     ctx.stroke();
     ctx.setLineDash([]);
 
+    for (const g of gates) drawGate(g);
+    for (const c of crates) drawCrate(c);
+
     // 弾
     ctx.fillStyle = "#fffa65";
     for (const b of bullets) {
@@ -438,19 +724,26 @@
       ctx.fillRect(b.x - 1.5, b.y, 3, 10);
     }
 
-    // パワーアップ
-    for (const p of powerups) {
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(Math.sin(Date.now() / 200) * 0.3);
-      ctx.font = "26px sans-serif";
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(p.kind === "spread" ? "🔱" : "💊", 0, 0);
-      ctx.restore();
-    }
-
     for (const e of enemies) drawZombie(e);
-    if (state === STATE.PLAYING) drawPlayer();
+
+    // 隊列
+    if (state === STATE.PLAYING) {
+      // 後列から描いて前が手前に来るように
+      for (let i = gunnerPos.length - 1; i >= 1; i--) drawGunner(gunnerPos[i].x, gunnerPos[i].y, false);
+      if (gunnerPos.length) drawGunner(gunnerPos[0].x, gunnerPos[0].y, true);
+      // マズルフラッシュ
+      ctx.fillStyle = "#fffa65";
+      for (const m of muzzles) {
+        ctx.beginPath(); ctx.arc(m.x, m.y, 6 + Math.random() * 3, 0, Math.PI * 2); ctx.fill();
+      }
+      // 人数バッジ
+      ctx.textAlign = "center";
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillStyle = "#48dbfb";
+      ctx.shadowColor = "#000"; ctx.shadowBlur = 6;
+      ctx.fillText(`×${squadCount}`, leaderX, SQUAD_Y + 46 + Math.min(squadCount, MAX_SQUAD) / MAX_SQUAD * 60);
+      ctx.shadowBlur = 0;
+    }
 
     // パーティクル
     for (const p of particles) {
@@ -464,9 +757,11 @@
     ctx.textAlign = "center";
     for (const t of floatTexts) {
       ctx.globalAlpha = Math.min(1, t.life * 2);
-      ctx.font = "bold 22px sans-serif";
+      ctx.font = `bold ${t.size}px sans-serif`;
       ctx.fillStyle = t.color;
+      ctx.shadowColor = "#000"; ctx.shadowBlur = 5;
       ctx.fillText(t.text, t.x, t.y);
+      ctx.shadowBlur = 0;
     }
     ctx.globalAlpha = 1;
 
@@ -481,10 +776,21 @@
     ctx.textAlign = "left";
     ctx.font = "14px sans-serif";
     ctx.fillStyle = "#888";
-    ctx.fillText(`💀 ${killCount}  BEST ${best}`, 14, 54);
-    if (player && player.powerTime > 0) {
-      ctx.fillStyle = "#48dbfb";
-      ctx.fillText(`POWER UP ${player.powerTime.toFixed(1)}s`, 14, 74);
+    ctx.fillText(`💀 ${killCount}  BEST ${best}  DMG ${bulletDmg}`, 14, 54);
+    let hudY = 74;
+    if (rapidTime > 0) {
+      ctx.fillStyle = "#ff9ff3";
+      ctx.fillText(`RAPID ${rapidTime.toFixed(1)}s`, 14, hudY); hudY += 18;
+    }
+    if (spreadTime > 0) {
+      ctx.fillStyle = "#ffd32a";
+      ctx.fillText(`3WAY ${spreadTime.toFixed(1)}s`, 14, hudY);
+    }
+
+    // ボムのフラッシュ
+    if (flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${flash * 1.6})`;
+      ctx.fillRect(-20, -20, W + 40, H + 40);
     }
 
     ctx.restore();
@@ -496,6 +802,7 @@
 
   function startGame() {
     reset();
+    updateGunnerPos();
     state = STATE.PLAYING;
     startScreen.classList.add("hidden");
     gameoverScreen.classList.add("hidden");
@@ -505,11 +812,11 @@
   function gameOver() {
     state = STATE.GAMEOVER;
     shake = 14;
-    spawnParticles(player.x, player.y, "#ff4757", 40, 2);
+    spawnParticles(leaderX, SQUAD_Y, "#ff4757", 40, 2);
     beep(120, 0.5, "sawtooth", 0.1);
     if (score > best) {
       best = score;
-      localStorage.setItem("zs_best", String(best));
+      localStorage.setItem("gs_best", String(best));
     }
     document.getElementById("final-score").textContent = score;
     document.getElementById("best-score-label").textContent = `ベストスコア: ${best}`;
@@ -521,6 +828,7 @@
 
   // ---- メインループ ----
   reset();
+  updateGunnerPos();
   lastTime = performance.now();
   function loop(now) {
     const dt = Math.min((now - lastTime) / 1000, 1 / 20);
