@@ -62,36 +62,6 @@
   }
   #gameover-screen button:active { box-shadow: 0 2px 0 #a3122a; }
 
-  #levelup-screen { background: rgba(5,5,15,.72); backdrop-filter: blur(2px); }
-  #levelup-screen h2 {
-    font-size: clamp(26px, 6vw, 42px);
-    color: #ffd32a;
-    letter-spacing: .12em;
-    text-shadow: 0 0 20px rgba(255,211,42,.8);
-    margin-bottom: 18px;
-    animation: pulse .8s infinite alternate;
-  }
-  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.06); } }
-  #upgrade-cards { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; max-width: 480px; }
-  .upgrade-card {
-    width: 136px;
-    padding: 16px 10px 14px;
-    background: linear-gradient(180deg, #1c1c34, #10101f);
-    border: 2px solid #3d3d6b;
-    border-radius: 14px;
-    cursor: pointer;
-    transition: transform .1s, border-color .1s, box-shadow .1s;
-    color: #fff;
-  }
-  .upgrade-card:hover, .upgrade-card:active {
-    transform: translateY(-6px) scale(1.04);
-    border-color: #ffd32a;
-    box-shadow: 0 0 24px rgba(255,211,42,.45);
-  }
-  .upgrade-card .icon { font-size: 38px; margin-bottom: 8px; }
-  .upgrade-card .name { font-size: 15px; font-weight: bold; color: #ffd32a; margin-bottom: 6px; }
-  .upgrade-card .desc { font-size: 12px; color: #bbb; line-height: 1.5; }
-  .upgrade-card .key { font-size: 10px; color: #666; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -104,15 +74,10 @@
     <p>🚪 <b>×2 / ×3 / +10</b> のゲートをくぐると自軍が増殖（上限なし！）</p>
     <p>🔫 マイナスゲートは撃ちまくればプラスに変わる！</p>
     <p>📦 宝箱を撃って壊すとパワーアップ！</p>
-    <p>⭐ レベルアップで3つの強化から選択！</p>
+    <p>⭐ レベルアップで自動パワーアップ！</p>
     <p>👑 5ウェーブごとに巨大UFOボスが出現！</p>
     <p>操作：マウス / タッチ / ←→キー（射撃は自動）</p>
     <button id="start-btn">▶ ゲームスタート</button>
-  </div>
-
-  <div id="levelup-screen" class="overlay hidden">
-    <h2>⭐ LEVEL UP! ⭐</h2>
-    <div id="upgrade-cards"></div>
   </div>
 
   <div id="gameover-screen" class="overlay hidden">
@@ -434,7 +399,7 @@
   // ============================================================
   // ゲーム状態（ロジックは2D版から移植）
   // ============================================================
-  const STATE = { TITLE: 0, PLAYING: 1, LEVELUP: 2, GAMEOVER: 3 };
+  const STATE = { TITLE: 0, PLAYING: 1, GAMEOVER: 3 };
   let state = STATE.TITLE;
 
   let leaderX, targetX, squadCount, bulletDmg, fireRate, spreadTime, rapidTime;
@@ -485,14 +450,7 @@
 
   // ---- 入力（レイキャストで地面上のxを取得）----
   const keys = {};
-  window.addEventListener("keydown", e => {
-    keys[e.key] = true;
-    if (state === STATE.LEVELUP && ["1", "2", "3"].includes(e.key)) {
-      const cards = document.querySelectorAll(".upgrade-card");
-      const c = cards[Number(e.key) - 1];
-      if (c) c.click();
-    }
-  });
+  window.addEventListener("keydown", e => { keys[e.key] = true; });
   window.addEventListener("keyup", e => { keys[e.key] = false; });
 
   const raycaster = new THREE.Raycaster();
@@ -546,44 +504,23 @@
     { id: "speed",   icon: "💨", name: "高速弾",         desc: "弾速 +25%",                   can: () => bulletSpeed < 1600, apply: () => { bulletSpeed *= 1.25; } },
   ];
 
-  const levelupScreen = document.getElementById("levelup-screen");
-  const cardsBox = document.getElementById("upgrade-cards");
-
+  // レベルアップは自動付与（ポーズなし・テンポ重視）
+  let banner = null;   // {title, sub, life, maxLife}
   function gainXP(n) {
     xp += n;
-    if (xp >= xpNext && state === STATE.PLAYING) showLevelUp();
+    while (xp >= xpNext && state === STATE.PLAYING) autoLevelUp();
   }
-  function showLevelUp() {
-    state = STATE.LEVELUP;
+  function autoLevelUp() {
     const pool = UPGRADES.filter(u => u.can());
-    const picks = [];
-    while (picks.length < 3 && pool.length) {
-      picks.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
-    }
-    cardsBox.innerHTML = "";
-    picks.forEach((u, i) => {
-      const div = document.createElement("div");
-      div.className = "upgrade-card";
-      div.innerHTML = `<div class="icon">${u.icon}</div><div class="name">${u.name}</div><div class="desc">${u.desc}</div><div class="key">[${i + 1}]</div>`;
-      div.addEventListener("click", () => chooseUpgrade(u));
-      cardsBox.appendChild(div);
-    });
-    levelupScreen.classList.remove("hidden");
-    fanfare();
-  }
-  function chooseUpgrade(u) {
-    if (state !== STATE.LEVELUP) return;
+    const u = pool[Math.floor(Math.random() * pool.length)] || UPGRADES[0];
     u.apply();
     xp -= xpNext;
     level++;
     xpNext = 10 + (level - 1) * 8;
-    addFloatText(leaderX, SQUAD_Y - 70, `${u.icon} ${u.name}！`, "#ffd32a", 26);
+    banner = { title: `⭐ LEVEL UP! Lv.${level}`, sub: `${u.icon} ${u.name} — ${u.desc}`, life: 2.2, maxLife: 2.2 };
     spawnShockwave(leaderX, SQUAD_Y, 130, 0xffd32a);
-    spawnParticles(leaderX, SQUAD_Y, "#ffd32a", 24, 1.4);
-    beep(1300, 0.25, "triangle", 0.09);
-    levelupScreen.classList.add("hidden");
-    state = STATE.PLAYING;
-    if (xp >= xpNext) showLevelUp();
+    spawnParticles(leaderX, SQUAD_Y, "#ffd32a", 24, 1.4, 20);
+    fanfare();
   }
   function playerTier() {
     return level >= 8 ? 2 : level >= 4 ? 1 : 0;
@@ -1339,8 +1276,31 @@
     }
     hctx.globalAlpha = 1;
 
+    // レベルアップバナー（ポーズせず上部にドンと出す）
+    if (banner) {
+      banner.life -= 1 / 60;
+      if (banner.life <= 0) banner = null;
+      else {
+        const p = banner.life / banner.maxLife;
+        const pop = 1 + Math.max(0, p - 0.88) * 6;          // 出現時にポンと拡大
+        hctx.globalAlpha = Math.min(1, p * 4);
+        hctx.textAlign = "center";
+        hctx.font = `bold ${Math.round(34 * pop)}px sans-serif`;
+        hctx.fillStyle = "#ffd32a";
+        hctx.shadowColor = "#ffd32a"; hctx.shadowBlur = 18;
+        hctx.fillText(banner.title, w / 2, h * 0.3);
+        hctx.shadowBlur = 0;
+        hctx.font = "bold 18px sans-serif";
+        hctx.fillStyle = "#fff";
+        hctx.shadowColor = "#000"; hctx.shadowBlur = 6;
+        hctx.fillText(banner.sub, w / 2, h * 0.3 + 34);
+        hctx.shadowBlur = 0;
+        hctx.globalAlpha = 1;
+      }
+    }
+
     // 人数バッジ（先頭の下）
-    if (state === STATE.PLAYING || state === STATE.LEVELUP) {
+    if (state === STATE.PLAYING) {
       const s = toScreen(leaderX, SQUAD_Y + 40, 0);
       if (!s.behind) {
         hctx.font = "bold 22px sans-serif";
@@ -1423,11 +1383,11 @@
 
   function startGame() {
     reset();
+    banner = null;
     updateGunnerPos();
     state = STATE.PLAYING;
     startScreen.classList.add("hidden");
     gameoverScreen.classList.add("hidden");
-    levelupScreen.classList.add("hidden");
     beep(660, 0.15, "triangle", 0.06);
   }
   function gameOver() {
