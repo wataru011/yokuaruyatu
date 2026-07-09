@@ -69,6 +69,7 @@
     <p>🚪 <b>×2 / ×3 / +10</b> のゲートをくぐると自軍が増殖！</p>
     <p>🔫 マイナスゲートは撃ちまくればプラスに変わる！</p>
     <p>📦 宝箱を撃って壊すとパワーアップ！</p>
+    <p>👑 5ウェーブごとに巨大ボスが出現！</p>
     <p>操作：マウス / タッチ / ←→キー（射撃は自動）</p>
     <button id="start-btn">▶ ゲームスタート</button>
   </div>
@@ -119,7 +120,10 @@
   let score, wave, killCount;
   let fireAcc, fireIdx, muzzles;
   let spawnTimer, hordeTimer, gateTimer, crateTimer, waveTimer, shake, flash, lastTime;
+  let boss, bossMinionTimer;
   let best = Number(localStorage.getItem("gs_best") || 0);
+  // デバッグ用: ?wave=4 で途中ウェーブから開始できる
+  const DEBUG_WAVE = Number(new URLSearchParams(location.search).get("wave")) || 0;
 
   // ---- 隊列オフセット（先頭1人 + 後ろに広がる隊形）----
   const OFFSETS = [{ x: 0, y: 0 }];
@@ -144,10 +148,11 @@
     fireRate = 0.5;          // 1人あたり 秒/発
     spreadTime = 0; rapidTime = 0;
     bullets = []; enemies = []; gates = []; crates = []; particles = []; floatTexts = [];
-    score = 0; wave = 1; killCount = 0;
+    score = 0; wave = DEBUG_WAVE || 1; killCount = 0;
     fireAcc = 0; fireIdx = 0; muzzles = [];
     spawnTimer = 0.6; hordeTimer = 6; gateTimer = 3.5; crateTimer = 6; waveTimer = 0;
     shake = 0; flash = 0;
+    boss = null; bossMinionTimer = 0;
   }
 
   // ---- 入力 ----
@@ -211,6 +216,32 @@
     }
     addFloatText(W / 2, 130, "⚠ 大群接近！", "#ff6b81", 26);
     beep(220, 0.25, "sawtooth", 0.07);
+  }
+
+  // ---- ボス（5ウェーブごと）----
+  function spawnBoss() {
+    const hp = 250 + wave * 50;
+    boss = {
+      x: W / 2, y: -140, targetY: 215,
+      w: 150, h: 160,
+      hp, maxHp: hp,
+      wobble: 0, hitFlash: 0,
+    };
+    bossMinionTimer = 2;
+    addFloatText(W / 2, 200, "👑 ボス出現！！", "#e056fd", 30);
+    shake = Math.min(shake + 10, 16);
+    beep(70, 0.6, "sawtooth", 0.12);
+  }
+  function killBoss() {
+    const bonus = 1000 + wave * 200;
+    score += bonus; killCount++;
+    spawnParticles(boss.x, boss.y, "#a29bfe", 60, 2.2);
+    addFloatText(boss.x, boss.y, `👑 BOSS撃破！ +${bonus}`, "#e056fd", 28);
+    squadCount = Math.min(MAX_SQUAD, squadCount + 8);
+    addFloatText(leaderX, SQUAD_Y - 60, "+8人！", "#48dbfb", 24);
+    flash = 0.4; shake = 16;
+    beep(1300, 0.4, "triangle", 0.1);
+    boss = null;
   }
 
   // ---- ゲート ----
@@ -457,6 +488,13 @@
           continue outer;
         }
       }
+      if (boss && Math.abs(b.x - boss.x) < boss.w / 2 + b.r && Math.abs(b.y - boss.y) < boss.h / 2 + b.r) {
+        boss.hp -= b.dmg; boss.hitFlash = 0.06;
+        spawnParticles(b.x, b.y, "#fffa65", 2, 0.5);
+        bullets.splice(i, 1);
+        if (boss.hp <= 0) killBoss();
+        continue;
+      }
       for (let j = enemies.length - 1; j >= 0; j--) {
         const e = enemies[j];
         if (Math.abs(b.x - e.x) < e.w / 2 + b.r && Math.abs(b.y - e.y) < e.h / 2 + b.r) {
@@ -484,6 +522,30 @@
         }
         if (state !== STATE.PLAYING) return;
         break;
+      }
+    }
+
+    // ボス：中段まで降りてきて、自機を追いながらミニオンを召喚する
+    if (boss) {
+      if (boss.y < boss.targetY) {
+        boss.y = Math.min(boss.targetY, boss.y + 90 * dt);
+      } else {
+        const bdx = leaderX - boss.x;
+        boss.x += Math.max(-45, Math.min(45, bdx)) * dt;
+      }
+      boss.wobble += dt * 2;
+      if (boss.hitFlash > 0) boss.hitFlash -= dt;
+      bossMinionTimer -= dt;
+      if (bossMinionTimer <= 0 && boss.y >= boss.targetY) {
+        bossMinionTimer = Math.max(1.6, 3.2 - wave * 0.05);
+        const n = 2 + Math.floor(Math.random() * 2);
+        for (let k = 0; k < n; k++) {
+          spawnEnemy(
+            Math.max(20, Math.min(W - 20, boss.x + (Math.random() - 0.5) * 180)),
+            boss.y + 70
+          );
+        }
+        beep(180, 0.1, "sawtooth", 0.05);
       }
     }
 
@@ -543,16 +605,16 @@
       if (t.life <= 0) floatTexts.splice(i, 1);
     }
 
-    // スポーン
+    // スポーン（ボス戦中は雑魚の流入を抑えて、ボスの召喚がメインになる）
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
-      spawnEnemy();
+      if (!boss) spawnEnemy();
       const interval = Math.max(0.13, 0.75 - wave * 0.045);
       spawnTimer = interval * (0.7 + Math.random() * 0.6);
     }
     hordeTimer -= dt;
     if (hordeTimer <= 0) {
-      spawnHorde();
+      if (!boss) spawnHorde();
       hordeTimer = Math.max(4, 9 - wave * 0.35) * (0.8 + Math.random() * 0.4);
     }
     gateTimer -= dt;
@@ -572,6 +634,7 @@
       waveTimer = 0; wave++;
       addFloatText(W / 2, H / 2, `WAVE ${wave}`, "#ff6b81", 30);
       beep(440, 0.3, "triangle", 0.06);
+      if (wave % 5 === 0 && !boss) spawnBoss();
     }
 
     if (shake > 0) shake = Math.max(0, shake - dt * 30);
@@ -636,6 +699,48 @@
     ctx.fillStyle = "#2f3640";
     ctx.fillRect(-2.5, -36, 5, 18);
     ctx.fillRect(-7, -22, 14, 7);
+    ctx.restore();
+  }
+
+  function drawBoss() {
+    const b = boss;
+    ctx.save();
+    ctx.translate(b.x, b.y + Math.sin(b.wobble) * 6);
+    if (b.hitFlash > 0) ctx.filter = "brightness(2.2)";
+    const w = b.w, h = b.h;
+    // 体
+    ctx.fillStyle = "#6c5ce7";
+    ctx.fillRect(-w * 0.38, -h * 0.08, w * 0.76, h * 0.5);
+    // 頭
+    ctx.fillStyle = "#a29bfe";
+    ctx.beginPath(); ctx.arc(0, -h * 0.26, w * 0.3, 0, Math.PI * 2); ctx.fill();
+    // 王冠
+    ctx.fillStyle = "#f9ca24";
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.22, -h * 0.42);
+    ctx.lineTo(-w * 0.22, -h * 0.55);
+    ctx.lineTo(-w * 0.11, -h * 0.46);
+    ctx.lineTo(0, -h * 0.57);
+    ctx.lineTo(w * 0.11, -h * 0.46);
+    ctx.lineTo(w * 0.22, -h * 0.55);
+    ctx.lineTo(w * 0.22, -h * 0.42);
+    ctx.closePath(); ctx.fill();
+    // 目
+    ctx.fillStyle = "#ff3838";
+    ctx.fillRect(-w * 0.16, -h * 0.32, w * 0.09, w * 0.09);
+    ctx.fillRect(w * 0.07, -h * 0.32, w * 0.09, w * 0.09);
+    // 口
+    ctx.strokeStyle = "#2d3436"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(0, -h * 0.2, w * 0.12, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+    // 腕
+    ctx.strokeStyle = "#6c5ce7";
+    ctx.lineWidth = w * 0.13; ctx.lineCap = "round";
+    const armY = Math.sin(b.wobble * 2) * 8;
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.34, 0); ctx.lineTo(-w * 0.6, h * 0.12 + armY);
+    ctx.moveTo(w * 0.34, 0);  ctx.lineTo(w * 0.6, h * 0.12 - armY);
+    ctx.stroke();
+    ctx.filter = "none";
     ctx.restore();
   }
 
@@ -725,6 +830,7 @@
     }
 
     for (const e of enemies) drawZombie(e);
+    if (boss) drawBoss();
 
     // 隊列
     if (state === STATE.PLAYING) {
@@ -777,6 +883,21 @@
     ctx.font = "14px sans-serif";
     ctx.fillStyle = "#888";
     ctx.fillText(`💀 ${killCount}  BEST ${best}  DMG ${bulletDmg}`, 14, 54);
+    // ボスHPバー
+    if (boss) {
+      const bw = W - 80;
+      ctx.textAlign = "center";
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "#e056fd";
+      ctx.fillText("👑 BOSS", W / 2, 96);
+      ctx.fillStyle = "rgba(0,0,0,.55)";
+      ctx.fillRect(40, 102, bw, 12);
+      ctx.fillStyle = "#e056fd";
+      ctx.fillRect(40, 102, bw * Math.max(0, boss.hp / boss.maxHp), 12);
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+      ctx.strokeRect(40, 102, bw, 12);
+      ctx.textAlign = "left";
+    }
     let hudY = 74;
     if (rapidTime > 0) {
       ctx.fillStyle = "#ff9ff3";
