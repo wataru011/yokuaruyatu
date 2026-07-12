@@ -3,23 +3,26 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>GATE INVADERS 2.5D - よくある広告のやつ</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>👾</text></svg>">
+<title>SUSHI INVADERS - よくある広告のやつ</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍣</text></svg>">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
-    background: #05050c;
+    background: #0a0a12;
     overflow: hidden;
     touch-action: none;
     font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
   }
-  #game-container { position: relative; width: 100%; height: 100%; }
-  #game-container > canvas.webgl { position: absolute; inset: 0; }
-  #hud {
-    position: absolute; inset: 0;
-    pointer-events: none;
-    z-index: 5;
+  #game-container {
+    position: relative;
+    width: 100%; height: 100%;
+    display: flex; justify-content: center; align-items: center;
+  }
+  canvas {
+    display: block;
+    background: #12121e;
+    box-shadow: 0 0 40px rgba(0,0,0,.8);
   }
   .overlay {
     position: absolute;
@@ -36,8 +39,8 @@
   .overlay h1 {
     font-size: clamp(28px, 7vw, 56px);
     letter-spacing: .1em;
-    color: #2eff7b;
-    text-shadow: 0 0 24px rgba(46,255,123,.6);
+    color: #ff8c42;
+    text-shadow: 0 0 24px rgba(255,140,66,.6);
     margin-bottom: 12px;
   }
   .overlay p { font-size: clamp(13px, 3.4vw, 19px); color: #ccc; margin: 5px 0; }
@@ -48,33 +51,29 @@
     font-size: clamp(16px, 4vw, 22px);
     font-weight: bold;
     color: #fff;
-    background: linear-gradient(180deg, #2eff7b, #0fae4a);
+    background: linear-gradient(180deg, #ff8c42, #e8542f);
     border: none; border-radius: 40px;
     cursor: pointer;
-    box-shadow: 0 6px 0 #087031, 0 10px 20px rgba(0,0,0,.5);
+    box-shadow: 0 6px 0 #a33212, 0 10px 20px rgba(0,0,0,.5);
     transition: transform .08s;
   }
-  .overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #087031; }
+  .overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #a33212; }
   #gameover-screen h1 { color: #ff4757; text-shadow: 0 0 24px rgba(255,71,87,.6); }
-  #gameover-screen button {
-    background: linear-gradient(180deg, #ff6b81, #e8304a);
-    box-shadow: 0 6px 0 #a3122a, 0 10px 20px rgba(0,0,0,.5);
-  }
-  #gameover-screen button:active { box-shadow: 0 2px 0 #a3122a; }
 </style>
 </head>
 <body>
 <div id="game-container">
-  <canvas id="hud"></canvas>
+  <canvas id="game"></canvas>
 
   <div id="start-screen" class="overlay">
-    <h1>👾 GATE INVADERS</h1>
-    <p>奥から迫りくるインベーダーの大群を撃ちまくれ！</p>
+    <h1>🍣 SUSHI INVADERS</h1>
+    <p>迫りくる寿司の大群を撃ちまくれ！</p>
     <p>🚪 <b>×2 / ×3 / +10</b> のゲートをくぐると自軍が増殖（上限なし！）</p>
     <p>🔫 マイナスゲートは撃ちまくればプラスに変わる！</p>
     <p>📦 宝箱を撃って壊すとパワーアップ！</p>
     <p>⭐ レベルアップで自動パワーアップ！</p>
-    <p>👑 5ウェーブごとに巨大UFOボスが出現！</p>
+    <p>🍣 ネタは7種類：マグロ・サーモン・エビ・タマゴ・ワサビ・イクラ・ウニ</p>
+    <p>👑 5ウェーブごとに特大マグロのボスが出現！</p>
     <p>操作：マウス / タッチ / ←→キー（射撃は自動）</p>
     <button id="start-btn">▶ ゲームスタート</button>
   </div>
@@ -88,421 +87,189 @@
   </div>
 </div>
 
-<script src="lib/three.min.js"></script>
 <script>
 (() => {
   "use strict";
 
-  // ============================================================
-  // ゲーム論理座標系（2D版と同じ）：
-  //   x: 0..480（横）  y: 0..800（奥行き。0=最奥、800=手前）
-  // 3Dワールドへは (x-240, 高さ, y-800) で変換する
-  // 描画は 2.5D：真上寄りの固定オーソグラフィックカメラ＋
-  // ドット絵ビルボードスプライト（遠近で小さくならず見やすい）
-  // ============================================================
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  // ---- 論理解像度（縦長・スマホ広告風） ----
   const W = 480, H = 800;
-  const SQUAD_Y = H - 130;
-  const FIRE_STREAMS = 22;
-  const DRAW_SQUAD = 90;
-  const MAX_BULLETS = 320;
-  const MAX_ENEMIES = 130;
-  const MAX_TEXTS = 36;
 
-  const container = document.getElementById("game-container");
-  const hud = document.getElementById("hud");
-  const hctx = hud.getContext("2d");
-
-  // ---------- three.js セットアップ ----------
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.domElement.classList.add("webgl");
-  container.insertBefore(renderer.domElement, container.firstChild);
-
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x090914);
-
-  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 4000);
-
-  scene.add(new THREE.AmbientLight(0xaab3dd, 1.1));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.9);
-  sun.position.set(220, 500, 180);
-  scene.add(sun);
-
-  // 地面＋グリッド
-  {
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(1600, 2800),
-      new THREE.MeshLambertMaterial({ color: 0x101226 })
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.set(0, -1, -700);
-    scene.add(ground);
-    const grid = new THREE.GridHelper(2800, 56, 0x27395f, 0x1a2440);
-    grid.position.set(0, 0, -500);
-    scene.add(grid);
-    const edgeMat = new THREE.MeshBasicMaterial({ color: 0x63304a });
-    for (const sx of [-246, 246]) {
-      const edge = new THREE.Mesh(new THREE.BoxGeometry(5, 2, 1800), edgeMat);
-      edge.position.set(sx, 1, -500);
-      scene.add(edge);
-    }
-    const dead = new THREE.Mesh(new THREE.BoxGeometry(492, 2, 6), new THREE.MeshBasicMaterial({ color: 0xff4757 }));
-    dead.position.set(0, 1, 30);
-    scene.add(dead);
-  }
-
-  // 星空
-  {
-    const n = 300, pos = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      pos[i * 3] = (Math.random() - 0.5) * 2600;
-      pos[i * 3 + 1] = 60 + Math.random() * 900;
-      pos[i * 3 + 2] = -2000 + Math.random() * 2300;
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x777799, size: 3, sizeAttenuation: false })));
-  }
-
-  // ============================================================
-  // ドット絵スプライト（2D版のパターンをテクスチャ化）
-  // ============================================================
-  const PIX = {
-    crabA: [
-      "..X.....X..",
-      "...X...X...",
-      "..XXXXXXX..",
-      ".XX.XXX.XX.",
-      "XXXXXXXXXXX",
-      "X.XXXXXXX.X",
-      "X.X.....X.X",
-      "...XX.XX...",
-    ],
-    crabB: [
-      "..X.....X..",
-      "X..X...X..X",
-      "X.XXXXXXX.X",
-      "XXX.XXX.XXX",
-      ".XXXXXXXXX.",
-      "..XXXXXXX..",
-      "..X.....X..",
-      ".X.......X.",
-    ],
-    squidA: [
-      "...XX...",
-      "..XXXX..",
-      ".XXXXXX.",
-      "XX.XX.XX",
-      "XXXXXXXX",
-      "..X..X..",
-      ".X.XX.X.",
-      "X.X..X.X",
-    ],
-    squidB: [
-      "...XX...",
-      "..XXXX..",
-      ".XXXXXX.",
-      "XX.XX.XX",
-      "XXXXXXXX",
-      ".X.XX.X.",
-      "X......X",
-      ".X....X.",
-    ],
-    octoA: [
-      "....XXXX....",
-      ".XXXXXXXXXX.",
-      "XXXXXXXXXXXX",
-      "XXX..XX..XXX",
-      "XXXXXXXXXXXX",
-      "...XX..XX...",
-      "..XX.XX.XX..",
-      "XX........XX",
-    ],
-    octoB: [
-      "....XXXX....",
-      ".XXXXXXXXXX.",
-      "XXXXXXXXXXXX",
-      "XXX..XX..XXX",
-      "XXXXXXXXXXXX",
-      "..XXX..XXX..",
-      ".XX..XX..XX.",
-      "..XX....XX..",
-    ],
-    ufo: [
-      ".....XXXXXX.....",
-      "...XXXXXXXXXX...",
-      "..XXXXXXXXXXXX..",
-      ".XX.XX.XX.XX.XX.",
-      "XXXXXXXXXXXXXXXX",
-      "..XXX..XX..XXX..",
-      "...X........X...",
-    ],
-    cannon1: [
-      "......X......",
-      ".....XXX.....",
-      ".....XXX.....",
-      ".XXXXXXXXXXX.",
-      "XXXXXXXXXXXXX",
-      "XXXXXXXXXXXXX",
-      "XXXXXXXXXXXXX",
-      "XXXXXXXXXXXXX",
-    ],
-    cannon2: [
-      "......X......",
-      ".....XXX.....",
-      "..X..XXX..X..",
-      ".XX.XXXXX.XX.",
-      "XXXXXXXXXXXXX",
-      "XXXXXXXXXXXXX",
-      ".XXXXXXXXXXX.",
-      "..XX.....XX..",
-    ],
-    cannon3: [
-      "...X.....X...",
-      "..XXX...XXX..",
-      "..XXX...XXX..",
-      ".XXXXXXXXXXX.",
-      "XXXXXXXXXXXXX",
-      "XXXXXXXXXXXXX",
-      "XXXXXXXXXXXXX",
-      ".XX.......XX.",
-    ],
-  };
-
-  function makeTex(pattern, color, opts = {}) {
-    const px = 8;
-    const rows = pattern.length, cols = pattern[0].length;
-    const c = document.createElement("canvas");
-    c.width = cols * px; c.height = rows * px;
-    const g = c.getContext("2d");
-    g.fillStyle = color;
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        if (pattern[y][x] === "X") g.fillRect(x * px, y * px, px, px);
-      }
-    }
-    if (opts.eyes) {
-      g.fillStyle = "#ff2a2a";
-      const ex = Math.floor(cols * 0.3), ex2 = Math.floor(cols * 0.62), ey = Math.floor(rows * 0.36);
-      g.fillRect(ex * px, ey * px, px, px);
-      g.fillRect(ex2 * px, ey * px, px, px);
-    }
-    if (opts.crown) {
-      g.fillStyle = "#f9ca24";
-      const cw = Math.floor(cols * 0.4), cx0 = Math.floor(cols * 0.3);
-      for (let i = 0; i < cw; i++) {
-        const hgt = i % 2 === 0 ? 2 : 1;
-        g.fillRect((cx0 + i) * px, (0 - 0) * px, px, hgt * px);
-      }
-    }
-    const tex = new THREE.CanvasTexture(c);
-    tex.magFilter = THREE.NearestFilter;
-    tex.minFilter = THREE.NearestFilter;
-    return tex;
-  }
-
-  const TEX = {
-    crab:  [makeTex(PIX.crabA, "#2eff7b", { eyes: true }), makeTex(PIX.crabB, "#2eff7b", { eyes: true })],
-    squid: [makeTex(PIX.squidA, "#ff9f43", { eyes: true }), makeTex(PIX.squidB, "#ff9f43", { eyes: true })],
-    octo:  [makeTex(PIX.octoA, "#c56cf0", { eyes: true }), makeTex(PIX.octoB, "#c56cf0", { eyes: true })],
-    cannon: [makeTex(PIX.cannon1, "#2eff7b"), makeTex(PIX.cannon2, "#48dbfb"), makeTex(PIX.cannon3, "#ffd32a")],
-    boss: makeTex(PIX.ufo, "#e056fd", { eyes: true }),
-  };
-
-  // 弾のグローテクスチャ
-  function makeGlowTex() {
-    const c = document.createElement("canvas");
-    c.width = 32; c.height = 64;
-    const g = c.getContext("2d");
-    const grad = g.createRadialGradient(16, 32, 2, 16, 32, 30);
-    grad.addColorStop(0, "rgba(230,255,240,1)");
-    grad.addColorStop(0.35, "rgba(120,255,180,.85)");
-    grad.addColorStop(1, "rgba(120,255,180,0)");
-    g.fillStyle = grad;
-    g.fillRect(0, 0, 32, 64);
-    g.fillStyle = "rgba(255,255,255,.95)";
-    g.fillRect(13, 10, 6, 44);
-    return new THREE.CanvasTexture(c);
-  }
-
-  // ---------- ビルボード（インスタンス化した板ポリ） ----------
-  const dummy = new THREE.Object3D();
-  const PLANE = new THREE.PlaneGeometry(1, 1);
-  const billboardQuat = new THREE.Quaternion();
-
-  function makeBillboard(tex, capacity, blending) {
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex, transparent: true, alphaTest: blending ? 0 : 0.1,
-      depthWrite: !blending,
-      blending: blending ? THREE.AdditiveBlending : THREE.NormalBlending,
-      side: THREE.DoubleSide,
-    });
-    const m = new THREE.InstancedMesh(PLANE, mat, capacity);
-    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    m.count = 0;
-    m.userData.cap = capacity;
-    m.frustumCulled = false;
-    // 初回コンパイル時にインスタンスカラーを有効化しておく
-    const white = new THREE.Color(0xffffff);
-    for (let i = 0; i < capacity; i++) m.setColorAt(i, white);
-    m.instanceColor.needsUpdate = true;
-    scene.add(m);
-    return m;
-  }
-
-  // 敵：タイプ×歩行2フレーム分のメッシュ（全員同時にコマが切り替わる＝本家の行進）
-  const ENEMY_MESH = {
-    crab:  [makeBillboard(TEX.crab[0], 140), makeBillboard(TEX.crab[1], 140)],
-    squid: [makeBillboard(TEX.squid[0], 140), makeBillboard(TEX.squid[1], 140)],
-    octo:  [makeBillboard(TEX.octo[0], 110), makeBillboard(TEX.octo[1], 110)],
-  };
-  const ENEMY_SIZE = { crab: [50, 36], squid: [36, 36], octo: [88, 58] };
-
-  const soldierMesh = makeBillboard(TEX.cannon[0], DRAW_SQUAD);
-  const SOLDIER_SIZE = [27, 17], LEADER_SIZE = [40, 25];
-
-  const bulletMesh = makeBillboard(makeGlowTex(), MAX_BULLETS, true);
-  const BULLET_SIZE = [7, 17];
-
-  // ボス（単体スプライト＋王冠）
-  const bossMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1),
-    new THREE.MeshBasicMaterial({ map: TEX.boss, transparent: true, alphaTest: 0.1, side: THREE.DoubleSide })
-  );
-  bossMesh.visible = false;
-  bossMesh.frustumCulled = false;
-  scene.add(bossMesh);
-
-  // 宝箱プール
-  const cratePool = [];
-  for (let i = 0; i < 4; i++) {
-    const g = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(38, 32, 32), new THREE.MeshLambertMaterial({ color: 0xb3742f }));
-    body.position.y = 16;
-    const band = new THREE.Mesh(new THREE.BoxGeometry(40, 10, 34), new THREE.MeshLambertMaterial({ color: 0xf9ca24, emissive: 0x332200 }));
-    band.position.y = 16;
-    g.add(body, band);
-    g.visible = false;
-    scene.add(g);
-    cratePool.push(g);
-  }
-
-  // ミサイルプール
-  const missilePool = [];
-  for (let i = 0; i < 14; i++) {
-    const m = new THREE.Mesh(new THREE.ConeGeometry(5, 18, 6), new THREE.MeshBasicMaterial({ color: 0xffbe76 }));
-    m.visible = false;
-    scene.add(m);
-    missilePool.push(m);
-  }
-
-  // 衝撃波プール
-  const wavePool = [];
-  for (let i = 0; i < 10; i++) {
-    const m = new THREE.Mesh(
-      new THREE.RingGeometry(0.86, 1, 40),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false })
-    );
-    m.rotation.x = -Math.PI / 2;
-    m.visible = false;
-    scene.add(m);
-    wavePool.push(m);
-  }
-
-  // パーティクル
-  const P_MAX = 600;
-  const pPos = new Float32Array(P_MAX * 3);
-  const pCol = new Float32Array(P_MAX * 3);
-  const pGeo = new THREE.BufferGeometry();
-  pGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
-  pGeo.setAttribute("color", new THREE.BufferAttribute(pCol, 3));
-  const pPoints = new THREE.Points(pGeo, new THREE.PointsMaterial({
-    size: 6, vertexColors: true, transparent: true, opacity: 0.95,
-    sizeAttenuation: false, depthWrite: false, blending: THREE.AdditiveBlending,
-  }));
-  pPoints.frustumCulled = false;
-  scene.add(pPoints);
-
-  // ゲート（2スロット再利用）
-  function makeLabelTexture() {
-    const c = document.createElement("canvas");
-    c.width = 256; c.height = 96;
-    return { canvas: c, tex: new THREE.CanvasTexture(c) };
-  }
-  const gateSlots = [];
-  for (let i = 0; i < 2; i++) {
-    const grp = new THREE.Group();
-    const gw = W / 2 - 14;
-    const panelMat = new THREE.MeshBasicMaterial({ color: 0x2e86de, transparent: true, opacity: 0.32, side: THREE.DoubleSide, depthWrite: false });
-    const panel = new THREE.Mesh(new THREE.PlaneGeometry(gw, 58), panelMat);
-    panel.position.y = 34;
-    const pillarMat = new THREE.MeshBasicMaterial({ color: 0x48dbfb });
-    const p1 = new THREE.Mesh(new THREE.BoxGeometry(8, 78, 8), pillarMat);
-    p1.position.set(-gw / 2, 39, 0);
-    const p2 = p1.clone();
-    p2.position.x = gw / 2;
-    const label = makeLabelTexture();
-    const labelMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(130, 49),
-      new THREE.MeshBasicMaterial({ map: label.tex, transparent: true, depthWrite: false, side: THREE.DoubleSide })
-    );
-    labelMesh.position.set(0, 38, 3);
-    grp.add(panel, p1, p2, labelMesh);
-    grp.visible = false;
-    scene.add(grp);
-    gateSlots.push({ grp, panelMat, pillarMat, label, lastText: "" });
-  }
-
-  // ---------- 座標変換 ----------
-  function toWorld(x, y, h = 0, out) {
-    out = out || new THREE.Vector3();
-    out.set(x - W / 2, h, y - H);
-    return out;
-  }
-  const _v = new THREE.Vector3();
-  function toScreen(x, y, h) {
-    toWorld(x, y, h, _v).project(camera);
-    return {
-      sx: (_v.x * 0.5 + 0.5) * hud.width / DPR,
-      sy: (-_v.y * 0.5 + 0.5) * hud.height / DPR,
-      behind: _v.z > 1,
-    };
-  }
-
-  // ---------- リサイズ（オーソ投影：遠くの敵も同じ大きさで見やすい） ----------
-  let DPR = 1;
   function resize() {
-    const w = window.innerWidth, h = window.innerHeight;
-    renderer.setSize(w, h);
-    const aspect = w / h;
-    const halfH = Math.max(345, 285 / aspect);
-    const halfW = halfH * aspect;
-    camera.left = -halfW; camera.right = halfW;
-    camera.top = halfH; camera.bottom = -halfH;
-    camera.updateProjectionMatrix();
-    DPR = Math.min(window.devicePixelRatio || 1, 2);
-    hud.width = w * DPR; hud.height = h * DPR;
-    hud.style.width = w + "px"; hud.style.height = h + "px";
-    hctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    canvas.width = W;
+    canvas.height = H;
+    canvas.style.width = `${W * scale}px`;
+    canvas.style.height = `${H * scale}px`;
   }
   window.addEventListener("resize", resize);
   resize();
 
   // ============================================================
-  // ゲーム状態（ロジックは前バージョンと同一）
+  // 寿司ドット絵スプライト
+  // 文字→色 のパレット付きパターンを事前レンダリング
   // ============================================================
+  function makeSprite(pattern, palette, px = 4) {
+    const rows = pattern.length, cols = pattern[0].length;
+    const c = document.createElement("canvas");
+    c.width = cols * px; c.height = rows * px;
+    const g = c.getContext("2d");
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const col = palette[pattern[y][x]];
+        if (col) { g.fillStyle = col; g.fillRect(x * px, y * px, px, px); }
+      }
+    }
+    return c;
+  }
+
+  const RICE = { "w": "#fff8e7", "W": "#e8dcc4" };
+
+  // にぎり（マグロ）
+  const P_NIGIRI = [
+    "............",
+    ".rrrrrrrrrr.",
+    "rrRRrrRRrrRr",
+    "rrrrrrrrrrrr",
+    ".wwwwwwwwww.",
+    "wwwwwwwwwwww",
+    "wWwwwWwwwWww",
+    ".wwwwwwwwww.",
+  ];
+  // エビ（しっぽ付き）
+  const P_EBI = [
+    "tt..........",
+    ".ttrrrrrrrr.",
+    ".trRRrrRRrr.",
+    "..rrrrrrrrrr",
+    ".wwwwwwwwww.",
+    "wwwwwwwwwwww",
+    "wWwwwWwwwWww",
+    ".wwwwwwwwww.",
+  ];
+  // タマゴ（海苔帯）
+  const P_TAMAGO = [
+    "............",
+    ".yyyyynnyyy.",
+    "yYyyyynnyyYy",
+    "yyyyyynnyyyy",
+    ".wwwwwnnwww.",
+    "wwwwwwnnwwww",
+    "wWwwwWnnwWww",
+    ".wwwwwwwwww.",
+  ];
+  // 軍艦（イクラ）
+  const P_IKURA = [
+    "..oOo.oOo...",
+    ".oOooOooOoO.",
+    ".nnnnnnnnnn.",
+    "nnnnnnnnnnnn",
+    "nnnnnnnnnnnn",
+    "nnnnnnnnnnnn",
+    ".nwwwwwwwwn.",
+    "..nnnnnnnn..",
+  ];
+  // 軍艦（ウニ・トゲトゲ）
+  const P_UNI = [
+    ".u.uUu.uU.u.",
+    "uUuUuuUuuUuU",
+    ".nnnnnnnnnn.",
+    "nnnnnnnnnnnn",
+    "nnnnnnnnnnnn",
+    "nnnnnnnnnnnn",
+    ".nwwwwwwwwn.",
+    "..nnnnnnnn..",
+  ];
+  // ワサビ（小さい山）
+  const P_WASABI = [
+    "..gG.g..",
+    ".gGGgGg.",
+    "gGGGGGGg",
+    "gggGGggg",
+    ".gggggg.",
+  ];
+  // 砲台（自機）
+  const P_CANNON = [
+    ["......X......", ".....XXX.....", ".....XXX.....", ".XXXXXXXXXXX.", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX"],
+    ["......X......", ".....XXX.....", "..X..XXX..X..", ".XX.XXXXX.XX.", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", ".XXXXXXXXXXX.", "..XX.....XX.."],
+    ["...X.....X...", "..XXX...XXX..", "..XXX...XXX..", ".XXXXXXXXXXX.", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", "XXXXXXXXXXXXX", ".XX.......XX."],
+  ];
+
+  const SPR = {
+    maguro: makeSprite(P_NIGIRI, { ...RICE, "r": "#ff6b6b", "R": "#ffb3b3" }),
+    salmon: makeSprite(P_NIGIRI, { ...RICE, "r": "#ff9f43", "R": "#ffd9a8" }),
+    ebi:    makeSprite(P_EBI,    { ...RICE, "r": "#ff8a70", "R": "#fff0e8", "t": "#e8542f" }),
+    tamago: makeSprite(P_TAMAGO, { ...RICE, "y": "#ffd32a", "Y": "#ffe89e", "n": "#2d3436" }),
+    ikura:  makeSprite(P_IKURA,  { ...RICE, "o": "#ff6348", "O": "#ffa502", "n": "#2d3436" }),
+    uni:    makeSprite(P_UNI,    { ...RICE, "u": "#8d6e2f", "U": "#f6b93b", "n": "#2d3436" }),
+    wasabi: makeSprite(P_WASABI, { "g": "#27ae60", "G": "#2ecc71" }),
+    cannon: P_CANNON.map((p, i) => makeSprite(p, { "X": ["#2eff7b", "#48dbfb", "#ffd32a"][i] }, 2.4)),
+    cannonBig: P_CANNON.map((p, i) => makeSprite(p, { "X": ["#2eff7b", "#48dbfb", "#ffd32a"][i] }, 3.4)),
+  };
+
+  function makeGlow(color, r) {
+    const c = document.createElement("canvas");
+    c.width = c.height = r * 2;
+    const g = c.getContext("2d");
+    const grad = g.createRadialGradient(r, r, 0, r, r, r);
+    grad.addColorStop(0, color);
+    grad.addColorStop(0.4, color.replace(")", ",0.35)").replace("rgb", "rgba"));
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, r * 2, r * 2);
+    return c;
+  }
+  SPR.bulletGlow = makeGlow("rgb(120,255,180)", 8);
+  SPR.missileGlow = makeGlow("rgb(255,160,80)", 14);
+
+  // ============================================================
+  // 敵（寿司ネタ）定義
+  // ============================================================
+  const SUSHI_TYPES = {
+    maguro: { spr: "maguro", w: 48, h: 32, hp: w => 2 + w,                speed: w => 50 + w * 4,   score: 100,  cost: 2,  xp: 2,  wob: 16 },
+    salmon: { spr: "salmon", w: 44, h: 30, hp: w => 1 + Math.floor(w/2),  speed: w => 105 + w * 6,  score: 150,  cost: 1,  xp: 2,  wob: 22 },
+    ebi:    { spr: "ebi",    w: 46, h: 32, hp: w => 3 + w,                speed: w => 70 + w * 5,   score: 200,  cost: 2,  xp: 3,  wob: 60 },
+    tamago: { spr: "tamago", w: 50, h: 34, hp: w => 6 + w * 2,            speed: w => 40 + w * 3,   score: 250,  cost: 3,  xp: 4,  wob: 8  },
+    wasabi: { spr: "wasabi", w: 28, h: 20, hp: () => 1,                   speed: w => 170 + w * 8,  score: 300,  cost: 3,  xp: 3,  wob: 34 },
+    ikura:  { spr: "ikura",  w: 64, h: 44, hp: w => 16 + w * 5,           speed: w => 26 + w * 1.5, score: 500,  cost: 10, xp: 8,  wob: 6  },
+    uni:    { spr: "uni",    w: 72, h: 50, hp: w => 30 + w * 8,           speed: w => 22 + w,       score: 1000, cost: 12, xp: 15, wob: 4  },
+  };
+  function pickSushi() {
+    const t = [["maguro", 30]];
+    if (wave >= 2) t.push(["salmon", 16], ["ebi", 12], ["ikura", 14 + wave * 1.5]);
+    if (wave >= 3) t.push(["tamago", 12]);
+    if (wave >= 4) t.push(["wasabi", 9]);
+    if (wave >= 5) t.push(["uni", 4 + wave * 0.5]);
+    let total = 0;
+    for (const [, p] of t) total += p;
+    let r = Math.random() * total;
+    for (const [k, p] of t) { r -= p; if (r <= 0) return k; }
+    return "maguro";
+  }
+
+  // ---- 定数 ----
+  const SQUAD_Y = H - 155;   // 隊列の先頭位置（デッドラインは画面最下部）
+  const FIRE_STREAMS = 22;
+  const DRAW_SQUAD = 80;
+  const MAX_BULLETS = 320;
+  const MAX_ENEMIES = 130;
+  const MAX_TEXTS = 36;
+
+  // ---- 状態 ----
   const STATE = { TITLE: 0, PLAYING: 1, GAMEOVER: 3 };
   let state = STATE.TITLE;
 
   let leaderX, targetX, squadCount, bulletDmg, fireRate, spreadTime, rapidTime;
   let shotWays, pierce, critChance, missileCount, bulletSpeed, fireRateMul;
   let level, xp, xpNext;
-  let bullets, missiles, enemies, gates, crates, particles, floatTexts, shockwaves;
+  let bullets, missiles, enemies, gates, crates, particles, floatTexts, shockwaves, stars, muzzles;
   let gunnerPos = [];
   let score, wave, killCount, combo, comboTimer, maxCombo;
   let fireAcc, fireIdx, missileTimer;
   let spawnTimer, hordeTimer, gateTimer, crateTimer, waveTimer, shake, flash, lastTime, elapsed;
-  let boss, bossMinionTimer;
+  let boss, bossMinionTimer, banner;
   let best = Number(localStorage.getItem("gs_best") || 0);
   const DEBUG_WAVE = Number(new URLSearchParams(location.search).get("wave")) || 0;
 
@@ -517,7 +284,7 @@
       const jy = Math.sin(idx * 777) * 4;
       OFFSETS.push({
         x: (posInRow - (width - 1) / 2) * 24 + jx,
-        y: rowIdx * 25 + jy,
+        y: rowIdx * 22 + jy,
       });
     }
   }
@@ -531,41 +298,36 @@
     shotWays = 1; pierce = 0; critChance = 0; missileCount = 0; bulletSpeed = 760;
     level = 1; xp = 0; xpNext = 10;
     bullets = []; missiles = []; enemies = []; gates = []; crates = [];
-    particles = []; floatTexts = []; shockwaves = [];
+    particles = []; floatTexts = []; shockwaves = []; muzzles = [];
     score = 0; wave = DEBUG_WAVE || 1; killCount = 0;
     combo = 0; comboTimer = 0; maxCombo = 0;
     fireAcc = 0; fireIdx = 0; missileTimer = 3;
     spawnTimer = 1.5; hordeTimer = 10; gateTimer = 3.5; crateTimer = 5; waveTimer = 0;
     shake = 0; flash = 0; elapsed = 0;
-    boss = null; bossMinionTimer = 0;
+    boss = null; bossMinionTimer = 0; banner = null;
+    stars = [];
+    for (let i = 0; i < 70; i++) {
+      stars.push({
+        x: Math.random() * W, y: Math.random() * H,
+        speed: 20 + Math.random() * 90,
+        size: Math.random() < 0.85 ? 1.5 : 2.5,
+      });
+    }
   }
 
   // ---- 入力 ----
   const keys = {};
   window.addEventListener("keydown", e => { keys[e.key] = true; });
-  window.addEventListener("keyup", e => { keys[e.key] = false; });
+  window.addEventListener("keyup",   e => { keys[e.key] = false; });
 
-  const raycaster = new THREE.Raycaster();
-  const ndc = new THREE.Vector2();
-  function pointerToGameX(clientX, clientY) {
-    const rect = renderer.domElement.getBoundingClientRect();
-    ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-    ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-    raycaster.setFromCamera(ndc, camera);
-    const o = raycaster.ray.origin, d = raycaster.ray.direction;
-    if (Math.abs(d.y) < 1e-6) return null;
-    const t = -o.y / d.y;
-    if (t < 0) return null;
-    return o.x + d.x * t + W / 2;
+  function pointerX(e) {
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    return cx / rect.width * W;
   }
-  function onPointer(e) {
-    const p = e.touches ? e.touches[0] : e;
-    const gx = pointerToGameX(p.clientX, p.clientY);
-    if (gx !== null) targetX = gx;
-  }
-  renderer.domElement.addEventListener("mousemove", onPointer);
-  renderer.domElement.addEventListener("touchstart", e => { e.preventDefault(); onPointer(e); }, { passive: false });
-  renderer.domElement.addEventListener("touchmove",  e => { e.preventDefault(); onPointer(e); }, { passive: false });
+  canvas.addEventListener("mousemove", e => { targetX = pointerX(e); });
+  canvas.addEventListener("touchstart", e => { e.preventDefault(); targetX = pointerX(e); }, { passive: false });
+  canvas.addEventListener("touchmove",  e => { e.preventDefault(); targetX = pointerX(e); }, { passive: false });
 
   // ---- サウンド ----
   let audioCtx = null;
@@ -596,7 +358,6 @@
     { id: "speed",   icon: "💨", name: "高速弾",         desc: "弾速 +25%",                   can: () => bulletSpeed < 1600, apply: () => { bulletSpeed *= 1.25; } },
   ];
 
-  let banner = null;
   function gainXP(n) {
     xp += n;
     while (xp >= xpNext && state === STATE.PLAYING) autoLevelUp();
@@ -609,8 +370,8 @@
     level++;
     xpNext = 10 + (level - 1) * 8;
     banner = { title: `⭐ LEVEL UP! Lv.${level}`, sub: `${u.icon} ${u.name} — ${u.desc}`, life: 2.2, maxLife: 2.2 };
-    spawnShockwave(leaderX, SQUAD_Y, 130, 0xffd32a);
-    spawnParticles(leaderX, SQUAD_Y, "#ffd32a", 24, 1.4, 20);
+    spawnShockwave(leaderX, SQUAD_Y, 130, "#ffd32a");
+    spawnParticles(leaderX, SQUAD_Y, "#ffd32a", 24, 1.4);
     fanfare();
   }
   function playerTier() {
@@ -618,23 +379,22 @@
   }
 
   // ---- 敵 ----
-  function spawnEnemy(x, y) {
+  function spawnEnemy(x, y, forceType) {
     if (enemies.length >= MAX_ENEMIES) return;
-    const r = Math.random();
-    let e;
-    if (r < 0.16 + wave * 0.015 && wave >= 2) {
-      e = { type: "tank", spr: "octo", w: 70, h: 46, hp: 16 + wave * 5, speed: 26 + wave * 1.5, score: 500, cost: 10, xp: 8, color: "#c56cf0" };
-    } else if (r < 0.35 && wave >= 2) {
-      e = { type: "fast", spr: "squid", w: 28, h: 24, hp: 1 + Math.floor(wave * 0.5), speed: 100 + wave * 6, score: 150, cost: 1, xp: 2, color: "#ff9f43" };
-    } else {
-      e = { type: "normal", spr: "crab", w: 44, h: 28, hp: 2 + wave, speed: 50 + wave * 4, score: 100, cost: 2, xp: 2, color: "#2eff7b" };
-    }
-    e.speed *= 0.9 + Math.random() * 0.25;
+    const key = forceType || pickSushi();
+    const t = SUSHI_TYPES[key];
+    const e = {
+      type: key, spr: t.spr,
+      w: t.w, h: t.h,
+      hp: t.hp(wave), speed: t.speed(wave) * (0.9 + Math.random() * 0.25),
+      score: t.score, cost: t.cost, xp: t.xp,
+      wobbleAmp: t.wob,
+      color: key === "wasabi" ? "#2ecc71" : key === "tamago" ? "#ffd32a" : key === "ikura" ? "#ff6348" : key === "uni" ? "#f6b93b" : "#ff8a70",
+    };
     e.maxHp = e.hp;
     e.x = x !== undefined ? x : 30 + Math.random() * (W - 60);
-    e.y = y !== undefined ? y : -40;
+    e.y = y !== undefined ? y : -e.h;
     e.wobblePhase = Math.random() * Math.PI * 2;
-    e.wobbleAmp = e.type === "tank" ? 6 : 16;
     e.hitFlash = 0;
     enemies.push(e);
   }
@@ -647,22 +407,22 @@
         -50 - Math.random() * 220
       );
     }
-    addFloatText(W / 2, 250, "⚠ 大群接近！", "#ff6b81", 26);
+    addFloatText(W / 2, 130, "⚠ 寿司の大群接近！", "#ff6b81", 26);
     beep(220, 0.25, "sawtooth", 0.07);
   }
 
-  // ---- ボス ----
+  // ---- ボス（特大マグロ）----
   function spawnBoss() {
     const hp = 250 + wave * 50;
     boss = {
-      x: W / 2, y: -140, targetY: 235,
-      w: 210, h: 100,
+      x: W / 2, y: -140, targetY: 215,
+      w: 216, h: 120,
       hp, maxHp: hp,
       wobble: 0, hitFlash: 0,
     };
     bossMinionTimer = 2;
-    addFloatText(W / 2, 300, "👑 ボス出現！！", "#e056fd", 30);
-    spawnShockwave(W / 2, 300, 220, 0xe056fd);
+    addFloatText(W / 2, 200, "👑 特大マグロ出現！！", "#e056fd", 28);
+    spawnShockwave(W / 2, 160, 200, "#e056fd");
     shake = Math.min(shake + 10, 16);
     beep(70, 0.6, "sawtooth", 0.12);
   }
@@ -673,14 +433,14 @@
     for (let i = 0; i < 3; i++) {
       setTimeout(() => {
         if (state !== STATE.PLAYING) return;
-        spawnShockwave(bx, by, 170 + i * 90, i % 2 ? 0xffd32a : 0xe056fd);
+        spawnShockwave(bx, by, 160 + i * 90, i % 2 ? "#ffd32a" : "#ff6b6b");
       }, i * 120);
     }
-    spawnShockwave(bx, by, 300, 0xffffff);
-    spawnParticles(bx, by, "#e056fd", 60, 2.4, 60);
-    spawnParticles(bx, by, "#ffd32a", 45, 1.8, 60);
-    spawnParticles(bx, by, "#ffffff", 30, 3, 60);
-    addFloatText(bx, by, `👑 BOSS撃破！ +${bonus}`, "#e056fd", 30);
+    spawnShockwave(bx, by, 280, "#ffffff");
+    spawnParticles(bx, by, "#ff6b6b", 50, 2.4);
+    spawnParticles(bx, by, "#fff8e7", 40, 1.8);
+    spawnParticles(bx, by, "#ffd32a", 30, 3);
+    addFloatText(bx, by, `👑 ボス撃破！ +${bonus}`, "#e056fd", 30);
     squadCount += 8;
     addFloatText(leaderX, SQUAD_Y - 60, "+8人！", "#48dbfb", 24);
     gainXP(40);
@@ -737,11 +497,11 @@
       }
     } else if (g.kind === "mult" && g.value === 2 && g.hits >= 30) {
       g.value = 3; g.hits = 0;
-      addFloatText(g.x + g.w / 2, g.y + g.h, "×3にパワーアップ！", "#48dbfb", 20);
+      addFloatText(g.x + g.w / 2, g.y + g.h / 2, "×3にパワーアップ！", "#48dbfb", 20);
       beep(1000, 0.2, "triangle", 0.08);
     } else if (g.kind === "div2" && g.hits >= 26) {
       g.kind = "plus"; g.value = 3; g.hits = 0;
-      addFloatText(g.x + g.w / 2, g.y + g.h, "プラスに変化！", "#48dbfb", 20);
+      addFloatText(g.x + g.w / 2, g.y + g.h / 2, "プラスに変化！", "#48dbfb", 20);
       beep(1000, 0.2, "triangle", 0.08);
     }
   }
@@ -750,13 +510,13 @@
       const before = squadCount;
       squadCount = squadCount * g.value;
       addFloatText(leaderX, SQUAD_Y - 60, `×${g.value}！ ${before}→${squadCount}人`, "#48dbfb", 26);
-      spawnShockwave(leaderX, SQUAD_Y, 150, 0x48dbfb);
+      spawnShockwave(leaderX, SQUAD_Y, 150, "#48dbfb");
       beep(880, 0.25, "triangle", 0.09);
     } else if (g.kind === "plus") {
       squadCount = Math.max(1, squadCount + g.value);
       const good = g.value > 0;
       addFloatText(leaderX, SQUAD_Y - 60, `${good ? "+" : ""}${g.value}人！`, good ? "#48dbfb" : "#ff4757", 26);
-      if (good) spawnShockwave(leaderX, SQUAD_Y, 110, 0x48dbfb);
+      if (good) spawnShockwave(leaderX, SQUAD_Y, 110, "#48dbfb");
       beep(good ? 880 : 150, 0.25, good ? "triangle" : "sawtooth", 0.09);
       if (!good) shake = Math.min(shake + 8, 14);
     } else if (g.kind === "div2") {
@@ -767,7 +527,7 @@
     } else if (g.kind === "dmg") {
       bulletDmg++;
       addFloatText(leaderX, SQUAD_Y - 60, `武器強化！ DMG ${bulletDmg}`, "#ff9ff3", 26);
-      spawnShockwave(leaderX, SQUAD_Y, 110, 0xff9ff3);
+      spawnShockwave(leaderX, SQUAD_Y, 110, "#ff9ff3");
       beep(1200, 0.25, "triangle", 0.09);
     }
   }
@@ -779,14 +539,14 @@
       y: -40,
       vy: 55 + Math.random() * 25,
       hp: 8 + wave, maxHp: 8 + wave,
-      size: 40,
+      size: 44,
       hitFlash: 0,
       phase: Math.random() * Math.PI * 2,
     });
   }
   function openCrate(c) {
-    spawnParticles(c.x, c.y, "#f0932b", 24, 1.2, 20);
-    spawnShockwave(c.x, c.y, 100, 0xf9ca24);
+    spawnParticles(c.x, c.y, "#f0932b", 24, 1.2);
+    spawnShockwave(c.x, c.y, 100, "#f9ca24");
     shake = Math.min(shake + 5, 12);
     gainXP(4);
     const r = Math.random();
@@ -806,11 +566,11 @@
     } else {
       flash = 0.4; shake = 16;
       addFloatText(c.x, c.y, "💣 ボム！！", "#ff6b81", 30);
-      spawnShockwave(c.x, c.y, 320, 0xffffff);
+      spawnShockwave(c.x, c.y, 320, "#ffffff");
       for (const e of enemies) {
         score += e.score; killCount++;
         gainXP(e.xp);
-        spawnParticles(e.x, e.y, e.color, 8, 1.2, 20);
+        spawnParticles(e.x, e.y, e.color, 8, 1.2);
       }
       enemies.length = 0;
       beep(60, 0.6, "sawtooth", 0.12);
@@ -820,27 +580,27 @@
   }
 
   // ---- エフェクト ----
-  function spawnParticles(x, y, cssColor, n, power = 1, baseH = 20) {
-    if (particles.length > P_MAX - 20) return;
-    const col = new THREE.Color(cssColor);
+  function spawnParticles(x, y, color, n, power = 1) {
+    if (particles.length > 400) return;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const s = (40 + Math.random() * 160) * power;
       particles.push({
-        x, y, h: baseH + Math.random() * 14,
-        vx: Math.cos(a) * s, vy: Math.sin(a) * s,
-        vh: 60 + Math.random() * 120 * power,
+        x, y,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40,
         life: 0.4 + Math.random() * 0.4,
-        r: col.r, g: col.g, b: col.b,
+        maxLife: 0.8,
+        size: 2 + Math.random() * 4,
+        color,
       });
     }
   }
-  function spawnShockwave(x, y, maxR, colorHex) {
-    shockwaves.push({ x, y, r: 8, maxR, life: 0.45, maxLife: 0.45, color: colorHex });
+  function spawnShockwave(x, y, maxR, color) {
+    shockwaves.push({ x, y, r: 8, maxR, life: 0.45, maxLife: 0.45, color });
   }
   function addFloatText(x, y, text, color = "#ffd32a", size = 22) {
     if (floatTexts.length >= MAX_TEXTS) floatTexts.shift();
-    floatTexts.push({ x, y, h: 40, text, color, size, life: 1.0 });
+    floatTexts.push({ x, y, text, color, size, life: 1.0 });
   }
   function comboMul() { return 1 + Math.min(combo, 50) * 0.02; }
 
@@ -853,21 +613,23 @@
       gainXP(e.xp);
       addFloatText(e.x, e.y, `+${pts}`);
       if (combo >= 10 && combo % 10 === 0) {
-        addFloatText(W / 2, 300, `🔥 ${combo} COMBO！`, "#ff9f43", 30);
-        spawnShockwave(e.x, e.y, 110, 0xff9f43);
+        addFloatText(W / 2, 200, `🔥 ${combo} COMBO！`, "#ff9f43", 30);
+        spawnShockwave(e.x, e.y, 110, "#ff9f43");
         beep(600 + combo * 8, 0.15, "triangle", 0.07);
       }
     }
-    spawnParticles(e.x, e.y, e.color, e.type === "tank" ? 26 : 10, e.type === "tank" ? 1.6 : 1, 24);
-    if (e.type === "tank") spawnShockwave(e.x, e.y, 120, 0xc56cf0);
-    shake = Math.min(shake + (e.type === "tank" ? 8 : 1.5), 12);
-    beep(e.type === "tank" ? 90 : 160, 0.12, "sawtooth", 0.06);
+    const big = e.type === "ikura" || e.type === "uni";
+    spawnParticles(e.x, e.y, e.color, big ? 26 : 10, big ? 1.6 : 1);
+    spawnParticles(e.x, e.y, "#fff8e7", big ? 12 : 5, 1);  // シャリ飛び散り
+    if (big) spawnShockwave(e.x, e.y, 120, e.color);
+    shake = Math.min(shake + (big ? 8 : 1.5), 12);
+    beep(big ? 90 : 160, 0.12, "sawtooth", 0.06);
   }
   function loseSoldiers(n, x, y) {
     squadCount -= n;
     combo = 0;
     addFloatText(x, y, `-${n}人`, "#ff4757", 24);
-    spawnParticles(x, y, "#ff4757", 12, 1.2, 16);
+    spawnParticles(x, y, "#ff4757", 12, 1.2);
     shake = Math.min(shake + 6, 14);
     beep(110, 0.2, "sawtooth", 0.09);
     if (squadCount <= 0) { squadCount = 0; gameOver(); }
@@ -881,7 +643,7 @@
       const o = OFFSETS[i];
       gunnerPos.push({
         x: Math.max(14, Math.min(W - 14, leaderX + o.x)),
-        y: SQUAD_Y + o.y,
+        y: Math.min(H - 16, SQUAD_Y + o.y),
       });
     }
   }
@@ -913,8 +675,8 @@
     return bestT;
   }
   function explodeMissile(m) {
-    spawnParticles(m.x, m.y, "#ff9f43", 16, 1.4, 24);
-    spawnShockwave(m.x, m.y, 90, 0xff9f43);
+    spawnParticles(m.x, m.y, "#ff9f43", 16, 1.4);
+    spawnShockwave(m.x, m.y, 90, "#ff9f43");
     shake = Math.min(shake + 3, 12);
     beep(120, 0.15, "sawtooth", 0.07);
     const R = 70;
@@ -934,6 +696,11 @@
   // ---- 更新 ----
   function update(dt) {
     elapsed += dt;
+
+    for (const s of stars) {
+      s.y += s.speed * dt;
+      if (s.y > H) { s.y = -3; s.x = Math.random() * W; }
+    }
 
     const speed = 430;
     if (keys["ArrowLeft"] || keys["a"])  targetX = leaderX - speed * dt * 1.6;
@@ -963,13 +730,18 @@
         bullets.push({
           x: g.x, y: g.y - 20,
           vx: Math.sin(off) * bulletSpeed, vy: -Math.cos(off) * bulletSpeed,
-          r: 4, dmg: bulletDmg * dmgScale,
+          r: 3, dmg: bulletDmg * dmgScale,
           pierce: pierce, lastHit: null,
         });
       }
+      muzzles.push({ x: g.x, y: g.y - 24, life: 0.05 });
       if (fired === 1) beep(880, 0.03, "square", 0.012);
     }
     if (bullets.length > MAX_BULLETS) bullets.splice(0, bullets.length - MAX_BULLETS);
+    for (let i = muzzles.length - 1; i >= 0; i--) {
+      muzzles[i].life -= dt;
+      if (muzzles[i].life <= 0) muzzles.splice(i, 1);
+    }
 
     missileTimer -= dt;
     if (missileTimer <= 0) { missileTimer = 3; fireMissiles(); }
@@ -989,9 +761,6 @@
         m.vx = Math.cos(na) * sp; m.vy = Math.sin(na) * sp;
       }
       m.x += m.vx * dt; m.y += m.vy * dt;
-      if (particles.length < P_MAX - 10) {
-        particles.push({ x: m.x, y: m.y, h: 22, vx: 0, vy: 40, vh: 0, life: 0.25, r: 1, g: 0.62, b: 0.26 });
-      }
       let hit = false;
       if (t && (t.x - m.x) ** 2 + (t.y - m.y) ** 2 < 30 * 30) hit = true;
       if (hit || m.life <= 0 || m.y < -20 || m.x < -20 || m.x > W + 20) {
@@ -1009,7 +778,7 @@
       for (const g of gates) {
         if (b.x > g.x && b.x < g.x + g.w && b.y > g.y && b.y < g.y + g.h) {
           upgradeGate(g);
-          spawnParticles(b.x, g.y + g.h, "#dfe6e9", 1, 0.4, 36);
+          spawnParticles(b.x, g.y + g.h, "#dfe6e9", 1, 0.4);
           bullets.splice(i, 1);
           continue outer;
         }
@@ -1018,7 +787,7 @@
         const c = crates[j];
         if (Math.abs(b.x - c.x) < c.size / 2 + b.r && Math.abs(b.y - c.y) < c.size / 2 + b.r) {
           c.hp -= b.dmg; c.hitFlash = 0.08;
-          spawnParticles(b.x, b.y, "#f0932b", 2, 0.5, 20);
+          spawnParticles(b.x, b.y, "#f0932b", 2, 0.5);
           bullets.splice(i, 1);
           if (c.hp <= 0) { openCrate(c); crates.splice(j, 1); }
           continue outer;
@@ -1028,7 +797,7 @@
         const crit = Math.random() < critChance;
         const dmg = crit ? b.dmg * 3 : b.dmg;
         boss.hp -= dmg; boss.hitFlash = 0.06;
-        spawnParticles(b.x, b.y, crit ? "#ffd32a" : "#fffa65", crit ? 6 : 2, crit ? 1 : 0.5, 60);
+        spawnParticles(b.x, b.y, crit ? "#ffd32a" : "#fffa65", crit ? 6 : 2, crit ? 1 : 0.5);
         if (crit) addFloatText(b.x, b.y, `${Math.round(dmg)}!`, "#ffd32a", 20);
         bullets.splice(i, 1);
         if (boss.hp <= 0) killBoss();
@@ -1041,7 +810,7 @@
           const crit = Math.random() < critChance;
           const dmg = crit ? b.dmg * 3 : b.dmg;
           e.hp -= dmg; e.hitFlash = 0.08;
-          spawnParticles(b.x, b.y, crit ? "#ffd32a" : "#fffa65", crit ? 5 : 2, crit ? 0.9 : 0.5, 26);
+          spawnParticles(b.x, b.y, crit ? "#ffd32a" : "#fffa65", crit ? 5 : 2, crit ? 0.9 : 0.5);
           if (crit) addFloatText(b.x, b.y, `${Math.round(dmg)}!`, "#ffd32a", 18);
           if (e.hp <= 0) { killEnemy(e); enemies.splice(j, 1); }
           if (b.pierce > 0) {
@@ -1104,7 +873,7 @@
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
       e.y += e.speed * dt;
-      e.wobblePhase += dt * (e.type === "fast" ? 9 : 5);
+      e.wobblePhase += dt * (e.type === "salmon" || e.type === "wasabi" ? 9 : 5);
       e.x += Math.sin(e.wobblePhase) * e.wobbleAmp * dt;
       e.x = Math.max(e.w / 2, Math.min(W - e.w / 2, e.x));
       if (e.hitFlash > 0) e.hitFlash -= dt;
@@ -1124,9 +893,10 @@
           continue;
         }
       }
+      // デッドライン（画面最下部）突破
       if (e.y - e.h / 2 > H) {
         enemies.splice(i, 1);
-        loseSoldiers(1, e.x, H - 40);
+        loseSoldiers(1, e.x, H - 30);
         if (state !== STATE.PLAYING) return;
       }
     }
@@ -1134,9 +904,7 @@
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += p.vx * dt; p.y += p.vy * dt;
-      p.h += p.vh * dt;
-      p.vh -= 300 * dt;
-      if (p.h < 0) p.h = 0;
+      p.vy += 300 * dt;
       p.life -= dt;
       if (p.life <= 0) particles.splice(i, 1);
     }
@@ -1148,7 +916,7 @@
     }
     for (let i = floatTexts.length - 1; i >= 0; i--) {
       const t = floatTexts[i];
-      t.h += 45 * dt; t.life -= dt;
+      t.y -= 45 * dt; t.life -= dt;
       if (t.life <= 0) floatTexts.splice(i, 1);
     }
 
@@ -1177,7 +945,7 @@
     waveTimer += dt;
     if (waveTimer >= 12) {
       waveTimer = 0; wave++;
-      addFloatText(W / 2, 400, `WAVE ${wave}`, "#ff6b81", 30);
+      addFloatText(W / 2, H / 2, `WAVE ${wave}`, "#ff6b81", 30);
       beep(440, 0.3, "triangle", 0.06);
       if (wave % 5 === 0 && !boss) spawnBoss();
     }
@@ -1187,198 +955,210 @@
   }
 
   // ============================================================
-  // 3D同期（ビルボードスプライト）＋HUD描画
+  // 描画（2D）
   // ============================================================
-  function walkFrame() {
-    return Math.floor(elapsed * 2.5) % 2;
-  }
-
-  function syncEnemies() {
-    const frame = walkFrame();
-    const counts = { crab: 0, squid: 0, octo: 0 };
-    for (const e of enemies) {
-      const mesh = ENEMY_MESH[e.spr][frame];
-      if (counts[e.spr] >= mesh.userData.cap) continue;
-      const i = counts[e.spr]++;
-      const [sw, sh] = ENEMY_SIZE[e.spr];
-      const bob = Math.abs(Math.sin(e.wobblePhase * 1.5)) * (e.type === "fast" ? 8 : 4);
-      const pop = e.hitFlash > 0 ? 1.18 : 1;
-      toWorld(e.x, e.y, sh * 0.42 + bob, dummy.position);
-      dummy.quaternion.copy(billboardQuat);
-      dummy.scale.set(sw * pop, sh * pop, 1);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-      const hpq = e.hp / e.maxHp;
-      if (e.hitFlash > 0) tmpColor.setRGB(1, 1, 1);
-      else if (hpq < 0.4) tmpColor.setRGB(1, 0.62, 0.62);
-      else tmpColor.setRGB(1, 1, 1);
-      mesh.setColorAt(i, tmpColor);
-    }
-    for (const key of ["crab", "squid", "octo"]) {
-      for (let f = 0; f < 2; f++) {
-        const mesh = ENEMY_MESH[key][f];
-        mesh.count = f === frame ? counts[key] : 0;
-        mesh.instanceMatrix.needsUpdate = true;
-        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      }
+  function drawSushi(e) {
+    const spr = SPR[e.spr];
+    ctx.save();
+    ctx.translate(e.x, e.y + Math.abs(Math.sin(e.wobblePhase * 1.5)) * -3);
+    ctx.rotate(Math.sin(e.wobblePhase) * 0.08);
+    if (e.hitFlash > 0) ctx.filter = "brightness(2.3)";
+    ctx.drawImage(spr, -e.w / 2, -e.h / 2, e.w, e.h);
+    ctx.filter = "none";
+    ctx.restore();
+    if (e.hp < e.maxHp) {
+      const bw = e.w * 0.9;
+      ctx.fillStyle = "rgba(0,0,0,.5)";
+      ctx.fillRect(e.x - bw / 2, e.y - e.h / 2 - 10, bw, 5);
+      ctx.fillStyle = e.hp / e.maxHp > 0.4 ? "#2ed573" : "#ff4757";
+      ctx.fillRect(e.x - bw / 2, e.y - e.h / 2 - 10, bw * Math.max(0, e.hp / e.maxHp), 5);
     }
   }
-  const tmpColor = new THREE.Color();
 
-  function syncSoldiers() {
-    const tier = playerTier();
-    if (soldierMesh.material.map !== TEX.cannon[tier]) {
-      soldierMesh.material.map = TEX.cannon[tier];
-      soldierMesh.material.needsUpdate = true;
-    }
-    let i = 0;
-    for (const g of gunnerPos) {
-      const [sw, sh] = i === 0 ? LEADER_SIZE : SOLDIER_SIZE;
-      const bob = Math.abs(Math.sin(elapsed * 10 + i)) * 2;
-      toWorld(g.x, g.y, sh * 0.5 + bob, dummy.position);
-      dummy.quaternion.copy(billboardQuat);
-      dummy.scale.set(sw, sh, 1);
-      dummy.updateMatrix();
-      soldierMesh.setMatrixAt(i, dummy.matrix);
-      i++;
-    }
-    soldierMesh.count = state === STATE.TITLE || state === STATE.GAMEOVER ? 0 : i;
-    soldierMesh.instanceMatrix.needsUpdate = true;
+  function drawBoss() {
+    const b = boss;
+    const yy = b.y + Math.sin(b.wobble) * 6;
+    ctx.save();
+    ctx.translate(b.x, yy);
+    if (b.hitFlash > 0) ctx.filter = "brightness(2.2)";
+    ctx.drawImage(SPR.maguro, -b.w / 2, -b.h / 2, b.w, b.h);
+    ctx.filter = "none";
+    // 目（ちょっと怒ってる）
+    ctx.fillStyle = "#2d3436";
+    ctx.fillRect(-b.w * 0.18, -b.h * 0.22, 14, 14);
+    ctx.fillRect(b.w * 0.08, -b.h * 0.22, 14, 14);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(-b.w * 0.18 + 3, -b.h * 0.22 + 3, 5, 5);
+    ctx.fillRect(b.w * 0.08 + 3, -b.h * 0.22 + 3, 5, 5);
+    // 王冠
+    ctx.fillStyle = "#f9ca24";
+    const cw = 60, chh = 26, cy = -b.h / 2 - chh + 4;
+    ctx.beginPath();
+    ctx.moveTo(-cw / 2, cy + chh);
+    ctx.lineTo(-cw / 2, cy);
+    ctx.lineTo(-cw / 4, cy + chh * 0.55);
+    ctx.lineTo(0, cy - 5);
+    ctx.lineTo(cw / 4, cy + chh * 0.55);
+    ctx.lineTo(cw / 2, cy);
+    ctx.lineTo(cw / 2, cy + chh);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
   }
 
-  function syncBullets() {
-    let i = 0;
+  function drawGunner(x, y, isLeader) {
+    const spr = isLeader ? SPR.cannonBig[playerTier()] : SPR.cannon[playerTier()];
+    ctx.drawImage(spr, x - spr.width / 2, y - spr.height / 2);
+  }
+
+  function drawGate(g) {
+    const good = gateIsGood(g);
+    ctx.save();
+    ctx.fillStyle = good ? "rgba(46,134,222,.32)" : "rgba(255,71,87,.28)";
+    ctx.strokeStyle = good ? "#48dbfb" : "#ff4757";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(g.x, g.y, g.w, g.h, 10);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = good ? "#48dbfb" : "#ff4757";
+    ctx.fillRect(g.x - 3, g.y - 6, 8, g.h + 12);
+    ctx.fillRect(g.x + g.w - 5, g.y - 6, 8, g.h + 12);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "bold 34px sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.shadowColor = good ? "#48dbfb" : "#ff4757";
+    ctx.shadowBlur = 14;
+    ctx.fillText(gateLabel(g), g.x + g.w / 2, g.y + g.h / 2);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+    ctx.textBaseline = "alphabetic";
+  }
+
+  function drawCrate(c) {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(Math.sin(c.phase) * 0.08);
+    if (c.hitFlash > 0) ctx.filter = "brightness(2)";
+    const s = c.size;
+    ctx.fillStyle = "#b3742f";
+    ctx.fillRect(-s / 2, -s / 2, s, s);
+    ctx.fillStyle = "#8a5a24";
+    ctx.fillRect(-s / 2, -s / 2, s, 6);
+    ctx.fillRect(-s / 2, s / 2 - 6, s, 6);
+    ctx.fillStyle = "#f9ca24";
+    ctx.fillRect(-4, -s / 2, 8, s);
+    ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#8a5a24";
+    ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.filter = "none";
+    if (c.hp < c.maxHp) {
+      ctx.rotate(-Math.sin(c.phase) * 0.08);
+      ctx.fillStyle = "rgba(0,0,0,.5)";
+      ctx.fillRect(-s / 2, -s / 2 - 12, s, 5);
+      ctx.fillStyle = "#f9ca24";
+      ctx.fillRect(-s / 2, -s / 2 - 12, s * Math.max(0, c.hp / c.maxHp), 5);
+    }
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.save();
+    if (shake > 0) {
+      ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    }
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, "#1b1b2f");
+    grad.addColorStop(1, "#22223a");
+    ctx.fillStyle = grad;
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+    ctx.fillStyle = "#8888aa";
+    for (const s of stars) ctx.fillRect(s.x, s.y, s.size, s.size);
+    // デッドライン（画面の一番下）
+    ctx.strokeStyle = "rgba(255,71,87,.8)";
+    ctx.setLineDash([12, 8]);
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, H - 3); ctx.lineTo(W, H - 3);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    for (const g of gates) drawGate(g);
+    for (const c of crates) drawCrate(c);
+
+    // 弾（小さめ＋グロー）
     for (const b of bullets) {
-      toWorld(b.x, b.y, 24, dummy.position);
-      dummy.quaternion.copy(billboardQuat);
-      dummy.scale.set(BULLET_SIZE[0], BULLET_SIZE[1], 1);
-      dummy.updateMatrix();
-      bulletMesh.setMatrixAt(i++, dummy.matrix);
-      if (i >= MAX_BULLETS) break;
+      ctx.drawImage(SPR.bulletGlow, b.x - 8, b.y - 8);
     }
-    bulletMesh.count = i;
-    bulletMesh.instanceMatrix.needsUpdate = true;
-  }
-
-  function syncBoss() {
-    if (!boss) { bossMesh.visible = false; return; }
-    bossMesh.visible = true;
-    const hover = 60 + Math.sin(boss.wobble) * 10;
-    toWorld(boss.x, boss.y, hover, bossMesh.position);
-    bossMesh.quaternion.copy(billboardQuat);
-    const pop = boss.hitFlash > 0 ? 1.06 : 1;
-    bossMesh.scale.set(boss.w * pop, boss.h * pop, 1);
-    bossMesh.material.color.setRGB(1, 1, 1);
-    if (boss.hitFlash > 0) bossMesh.material.color.setRGB(2, 2, 2);
-  }
-
-  function syncCrates() {
-    for (let i = 0; i < cratePool.length; i++) {
-      const g = cratePool[i];
-      const c = crates[i];
-      if (!c) { g.visible = false; continue; }
-      g.visible = true;
-      toWorld(c.x, c.y, Math.abs(Math.sin(c.phase)) * 6, g.position);
-      g.rotation.y = c.phase * 0.5;
-      const body = g.children[0];
-      body.material.emissive.setScalar(c.hitFlash > 0 ? 0.6 : 0);
+    ctx.fillStyle = "#eafff2";
+    for (const b of bullets) {
+      ctx.fillRect(b.x - 1.5, b.y - 5, 3, 10);
     }
-  }
 
-  function syncMissiles() {
-    for (let i = 0; i < missilePool.length; i++) {
-      const mesh = missilePool[i];
-      const m = missiles[i];
-      if (!m) { mesh.visible = false; continue; }
-      mesh.visible = true;
-      toWorld(m.x, m.y, 26, mesh.position);
-      mesh.rotation.set(Math.PI / 2, 0, -Math.atan2(m.vy, m.vx) - Math.PI / 2, "ZYX");
+    // ミサイル
+    for (const m of missiles) {
+      ctx.drawImage(SPR.missileGlow, m.x - 14, m.y - 14);
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      ctx.rotate(Math.atan2(m.vy, m.vx) + Math.PI / 2);
+      ctx.fillStyle = "#ffbe76";
+      ctx.fillRect(-3, -8, 6, 16);
+      ctx.fillStyle = "#ff6b81";
+      ctx.fillRect(-3, -8, 6, 5);
+      ctx.restore();
     }
-  }
 
-  function syncWaves() {
-    for (let i = 0; i < wavePool.length; i++) {
-      const mesh = wavePool[i];
-      const s = shockwaves[i];
-      if (!s) { mesh.visible = false; continue; }
-      mesh.visible = true;
-      toWorld(s.x, s.y, 2, mesh.position);
-      mesh.scale.setScalar(Math.max(1, s.r));
-      mesh.material.color.set(s.color);
-      mesh.material.opacity = Math.max(0, s.life / s.maxLife) * 0.8;
-    }
-  }
+    for (const e of enemies) drawSushi(e);
+    if (boss) drawBoss();
 
-  function syncParticles() {
-    let i = 0;
-    for (const p of particles) {
-      toWorld(p.x, p.y, p.h, _v);
-      pPos[i * 3] = _v.x; pPos[i * 3 + 1] = _v.y; pPos[i * 3 + 2] = _v.z;
-      const a = Math.max(0, Math.min(1, p.life * 2.2));
-      pCol[i * 3] = p.r * a; pCol[i * 3 + 1] = p.g * a; pCol[i * 3 + 2] = p.b * a;
-      i++;
-      if (i >= P_MAX) break;
-    }
-    for (let j = i; j < P_MAX; j++) {
-      pPos[j * 3] = 0; pPos[j * 3 + 1] = -9999; pPos[j * 3 + 2] = 0;
-    }
-    pGeo.attributes.position.needsUpdate = true;
-    pGeo.attributes.color.needsUpdate = true;
-  }
-
-  function syncGates() {
-    for (let i = 0; i < 2; i++) {
-      const slot = gateSlots[i];
-      const g = gates[i];
-      if (!g) { slot.grp.visible = false; continue; }
-      slot.grp.visible = true;
-      toWorld(g.x + g.w / 2, g.y + g.h / 2, 0, slot.grp.position);
-      const good = gateIsGood(g);
-      slot.panelMat.color.set(good ? 0x2e86de : 0xff4757);
-      slot.pillarMat.color.set(good ? 0x48dbfb : 0xff4757);
-      const text = gateLabel(g);
-      if (text !== slot.lastText) {
-        slot.lastText = text;
-        const c = slot.label.canvas, g2 = c.getContext("2d");
-        g2.clearRect(0, 0, c.width, c.height);
-        g2.font = "bold 64px sans-serif";
-        g2.textAlign = "center"; g2.textBaseline = "middle";
-        g2.shadowColor = good ? "#48dbfb" : "#ff4757";
-        g2.shadowBlur = 18;
-        g2.fillStyle = "#ffffff";
-        g2.fillText(text, c.width / 2, c.height / 2);
-        slot.label.tex.needsUpdate = true;
+    // 隊列
+    if (state === STATE.PLAYING) {
+      if (rapidTime > 0 || spreadTime > 0) {
+        ctx.fillStyle = rapidTime > 0 ? "rgba(255,159,243,.12)" : "rgba(255,211,42,.12)";
+        ctx.beginPath();
+        ctx.arc(leaderX, SQUAD_Y + 40, 90 + Math.sin(elapsed * 8) * 8, 0, Math.PI * 2);
+        ctx.fill();
       }
+      for (let i = gunnerPos.length - 1; i >= 1; i--) drawGunner(gunnerPos[i].x, gunnerPos[i].y, false);
+      if (gunnerPos.length) drawGunner(gunnerPos[0].x, gunnerPos[0].y, true);
+      ctx.fillStyle = "#fffa65";
+      for (const m of muzzles) {
+        ctx.beginPath(); ctx.arc(m.x, m.y, 4 + Math.random() * 3, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.textAlign = "center";
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillStyle = "#48dbfb";
+      ctx.shadowColor = "#000"; ctx.shadowBlur = 6;
+      ctx.fillText(`×${squadCount}`, leaderX, Math.min(H - 6, SQUAD_Y + 50 + Math.min(squadCount, DRAW_SQUAD) / DRAW_SQUAD * 90));
+      ctx.shadowBlur = 0;
     }
-  }
 
-  function updateCamera() {
-    const cx = (leaderX - W / 2) * 0.25;
-    const sx = shake > 0 ? (Math.random() - 0.5) * shake * 0.9 : 0;
-    const sy = shake > 0 ? (Math.random() - 0.5) * shake * 0.9 : 0;
-    camera.position.set(cx + sx, 660 + sy, 370);
-    camera.lookAt(cx, 0, -395);
-    camera.updateMatrixWorld();
-    billboardQuat.copy(camera.quaternion);
-  }
+    // 衝撃波
+    for (const s of shockwaves) {
+      ctx.globalAlpha = Math.max(0, s.life / s.maxLife) * 0.8;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
 
-  // ---- HUD ----
-  function drawHUD() {
-    const w = hud.width / DPR, h = hud.height / DPR;
-    hctx.clearRect(0, 0, w, h);
+    // パーティクル
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
 
-    hctx.textAlign = "center";
+    // フロートテキスト
+    ctx.textAlign = "center";
     for (const t of floatTexts) {
-      const s = toScreen(t.x, t.y, t.h);
-      if (s.behind) continue;
-      hctx.globalAlpha = Math.min(1, t.life * 2);
-      hctx.font = `bold ${t.size}px sans-serif`;
-      hctx.fillStyle = t.color;
-      hctx.shadowColor = "#000"; hctx.shadowBlur = 5;
-      hctx.fillText(t.text, s.sx, s.sy);
-      hctx.shadowBlur = 0;
+      ctx.globalAlpha = Math.min(1, t.life * 2);
+      ctx.font = `bold ${t.size}px sans-serif`;
+      ctx.fillStyle = t.color;
+      ctx.shadowColor = "#000"; ctx.shadowBlur = 5;
+      ctx.fillText(t.text, t.x, t.y);
+      ctx.shadowBlur = 0;
     }
-    hctx.globalAlpha = 1;
+    ctx.globalAlpha = 1;
 
     // レベルアップバナー
     if (banner) {
@@ -1387,94 +1167,85 @@
       else {
         const p = banner.life / banner.maxLife;
         const pop = 1 + Math.max(0, p - 0.88) * 6;
-        hctx.globalAlpha = Math.min(1, p * 4);
-        hctx.textAlign = "center";
-        hctx.font = `bold ${Math.round(34 * pop)}px sans-serif`;
-        hctx.fillStyle = "#ffd32a";
-        hctx.shadowColor = "#ffd32a"; hctx.shadowBlur = 18;
-        hctx.fillText(banner.title, w / 2, h * 0.3);
-        hctx.shadowBlur = 0;
-        hctx.font = "bold 18px sans-serif";
-        hctx.fillStyle = "#fff";
-        hctx.shadowColor = "#000"; hctx.shadowBlur = 6;
-        hctx.fillText(banner.sub, w / 2, h * 0.3 + 34);
-        hctx.shadowBlur = 0;
-        hctx.globalAlpha = 1;
+        ctx.globalAlpha = Math.min(1, p * 4);
+        ctx.textAlign = "center";
+        ctx.font = `bold ${Math.round(32 * pop)}px sans-serif`;
+        ctx.fillStyle = "#ffd32a";
+        ctx.shadowColor = "#ffd32a"; ctx.shadowBlur = 18;
+        ctx.fillText(banner.title, W / 2, H * 0.3);
+        ctx.shadowBlur = 0;
+        ctx.font = "bold 17px sans-serif";
+        ctx.fillStyle = "#fff";
+        ctx.shadowColor = "#000"; ctx.shadowBlur = 6;
+        ctx.fillText(banner.sub, W / 2, H * 0.3 + 32);
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
       }
     }
 
-    // 人数バッジ
-    if (state === STATE.PLAYING) {
-      const s = toScreen(leaderX, SQUAD_Y + 40, 0);
-      if (!s.behind) {
-        hctx.font = "bold 22px sans-serif";
-        hctx.fillStyle = "#48dbfb";
-        hctx.shadowColor = "#000"; hctx.shadowBlur = 6;
-        hctx.fillText(`×${squadCount}`, s.sx, s.sy + 30);
-        hctx.shadowBlur = 0;
-      }
-    }
+    // HUD
+    ctx.textAlign = "left";
+    ctx.font = "bold 22px sans-serif";
+    ctx.fillStyle = "#ffd32a";
+    ctx.fillText(`SCORE ${score}`, 14, 32);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#ff6b81";
+    ctx.fillText(`WAVE ${wave}`, W - 14, 32);
+    ctx.textAlign = "left";
+    ctx.font = "14px sans-serif";
+    ctx.fillStyle = "#999";
+    ctx.fillText(`🍣 ${killCount}  BEST ${best}  DMG ${bulletDmg}`, 14, 54);
 
-    hctx.textAlign = "left";
-    hctx.font = "bold 22px sans-serif";
-    hctx.fillStyle = "#ffd32a";
-    hctx.fillText(`SCORE ${score}`, 14, 32);
-    hctx.textAlign = "right";
-    hctx.fillStyle = "#ff6b81";
-    hctx.fillText(`WAVE ${wave}`, w - 14, 32);
-    hctx.textAlign = "left";
-    hctx.font = "14px sans-serif";
-    hctx.fillStyle = "#999";
-    hctx.fillText(`💀 ${killCount}  BEST ${best}  DMG ${bulletDmg}`, 14, 54);
-
-    hctx.fillStyle = "rgba(0,0,0,.5)";
-    hctx.fillRect(14, 62, w - 28, 8);
-    hctx.fillStyle = "#ffd32a";
-    hctx.fillRect(14, 62, (w - 28) * Math.min(1, xp / xpNext), 8);
-    hctx.font = "bold 12px sans-serif";
-    hctx.fillText(`Lv.${level}`, 14, 84);
+    ctx.fillStyle = "rgba(0,0,0,.5)";
+    ctx.fillRect(14, 62, W - 28, 8);
+    ctx.fillStyle = "#ffd32a";
+    ctx.fillRect(14, 62, (W - 28) * Math.min(1, xp / xpNext), 8);
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText(`Lv.${level}`, 14, 84);
 
     if (combo >= 5) {
-      hctx.textAlign = "right";
+      ctx.textAlign = "right";
       const pop = 1 + Math.max(0, comboTimer - 1.7) * 3;
-      hctx.font = `bold ${Math.round(24 * pop)}px sans-serif`;
-      hctx.fillStyle = combo >= 20 ? "#ff9f43" : "#ffd32a";
-      hctx.shadowColor = "#000"; hctx.shadowBlur = 6;
-      hctx.fillText(`${combo} COMBO`, w - 14, 92);
-      hctx.shadowBlur = 0;
-      hctx.textAlign = "left";
+      ctx.font = `bold ${Math.round(24 * pop)}px sans-serif`;
+      ctx.fillStyle = combo >= 20 ? "#ff9f43" : "#ffd32a";
+      ctx.shadowColor = "#000"; ctx.shadowBlur = 6;
+      ctx.fillText(`${combo} COMBO`, W - 14, 92);
+      ctx.shadowBlur = 0;
+      ctx.textAlign = "left";
     }
 
     if (boss) {
-      const bw = Math.min(w - 80, 420);
-      hctx.textAlign = "center";
-      hctx.font = "bold 14px sans-serif";
-      hctx.fillStyle = "#e056fd";
-      hctx.fillText("👑 BOSS", w / 2, 110);
-      hctx.fillStyle = "rgba(0,0,0,.55)";
-      hctx.fillRect(w / 2 - bw / 2, 116, bw, 12);
-      hctx.fillStyle = "#e056fd";
-      hctx.fillRect(w / 2 - bw / 2, 116, bw * Math.max(0, boss.hp / boss.maxHp), 12);
-      hctx.strokeStyle = "#fff"; hctx.lineWidth = 2;
-      hctx.strokeRect(w / 2 - bw / 2, 116, bw, 12);
-      hctx.textAlign = "left";
+      const bw = W - 80;
+      ctx.textAlign = "center";
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "#e056fd";
+      ctx.fillText("👑 特大マグロ", W / 2, 110);
+      ctx.fillStyle = "rgba(0,0,0,.55)";
+      ctx.fillRect(40, 116, bw, 12);
+      ctx.fillStyle = "#e056fd";
+      ctx.fillRect(40, 116, bw * Math.max(0, boss.hp / boss.maxHp), 12);
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+      ctx.strokeRect(40, 116, bw, 12);
+      ctx.textAlign = "left";
     }
 
     let hudY = 104;
-    hctx.font = "14px sans-serif";
+    ctx.font = "14px sans-serif";
     if (rapidTime > 0) {
-      hctx.fillStyle = "#ff9ff3";
-      hctx.fillText(`RAPID ${rapidTime.toFixed(1)}s`, 14, hudY); hudY += 18;
+      ctx.fillStyle = "#ff9ff3";
+      ctx.fillText(`RAPID ${rapidTime.toFixed(1)}s`, 14, hudY); hudY += 18;
     }
     if (spreadTime > 0) {
-      hctx.fillStyle = "#ffd32a";
-      hctx.fillText(`3WAY ${spreadTime.toFixed(1)}s`, 14, hudY);
+      ctx.fillStyle = "#ffd32a";
+      ctx.fillText(`3WAY ${spreadTime.toFixed(1)}s`, 14, hudY);
     }
 
     if (flash > 0) {
-      hctx.fillStyle = `rgba(255,255,255,${flash * 1.6})`;
-      hctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = `rgba(255,255,255,${flash * 1.6})`;
+      ctx.fillRect(-20, -20, W + 40, H + 40);
     }
+
+    ctx.restore();
   }
 
   // ---- ゲームフロー ----
@@ -1483,7 +1254,6 @@
 
   function startGame() {
     reset();
-    banner = null;
     updateGunnerPos();
     state = STATE.PLAYING;
     startScreen.classList.add("hidden");
@@ -1493,8 +1263,8 @@
   function gameOver() {
     state = STATE.GAMEOVER;
     shake = 14;
-    spawnParticles(leaderX, SQUAD_Y, "#ff4757", 40, 2, 20);
-    spawnShockwave(leaderX, SQUAD_Y, 220, 0xff4757);
+    spawnParticles(leaderX, SQUAD_Y, "#ff4757", 40, 2);
+    spawnShockwave(leaderX, SQUAD_Y, 220, "#ff4757");
     beep(120, 0.5, "sawtooth", 0.1);
     if (score > best) {
       best = score;
@@ -1512,6 +1282,7 @@
   window.__dbg = () => ({
     state, squadCount, level, xp, xpNext, score, killCount, wave,
     bullets: bullets.length, enemies: enemies.length, gates: gates.length,
+    types: enemies.reduce((a, e) => { a[e.type] = (a[e.type] || 0) + 1; return a; }, {}),
   });
 
   // ---- メインループ ----
@@ -1523,18 +1294,7 @@
     lastTime = now;
     if (state === STATE.PLAYING) update(dt);
     else elapsed += dt;
-    updateCamera();
-    syncEnemies();
-    syncSoldiers();
-    syncBullets();
-    syncBoss();
-    syncCrates();
-    syncMissiles();
-    syncWaves();
-    syncParticles();
-    syncGates();
-    renderer.render(scene, camera);
-    drawHUD();
+    draw();
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
