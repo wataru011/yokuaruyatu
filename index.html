@@ -101,7 +101,7 @@
   // ドット絵ビルボードスプライト（遠近で小さくならず見やすい）
   // ============================================================
   const W = 480, H = 800;
-  const SQUAD_Y = H - 150;
+  const SQUAD_Y = H - 130;
   const FIRE_STREAMS = 22;
   const DRAW_SQUAD = 90;
   const MAX_BULLETS = 320;
@@ -354,7 +354,7 @@
   const ENEMY_MESH = {
     crab:  [makeBillboard(TEX.crab[0], 140), makeBillboard(TEX.crab[1], 140)],
     squid: [makeBillboard(TEX.squid[0], 140), makeBillboard(TEX.squid[1], 140)],
-    octo:  [makeBillboard(TEX.octo[0], 60), makeBillboard(TEX.octo[1], 60)],
+    octo:  [makeBillboard(TEX.octo[0], 110), makeBillboard(TEX.octo[1], 110)],
   };
   const ENEMY_SIZE = { crab: [50, 36], squid: [36, 36], octo: [88, 58] };
 
@@ -362,7 +362,7 @@
   const SOLDIER_SIZE = [27, 17], LEADER_SIZE = [40, 25];
 
   const bulletMesh = makeBillboard(makeGlowTex(), MAX_BULLETS, true);
-  const BULLET_SIZE = [11, 26];
+  const BULLET_SIZE = [7, 17];
 
   // ボス（単体スプライト＋王冠）
   const bossMesh = new THREE.Mesh(
@@ -622,8 +622,8 @@
     if (enemies.length >= MAX_ENEMIES) return;
     const r = Math.random();
     let e;
-    if (r < 0.06 + wave * 0.008 && wave >= 3) {
-      e = { type: "tank", spr: "octo", w: 70, h: 46, hp: 20 + wave * 6, speed: 26 + wave * 1.5, score: 500, cost: 10, xp: 8, color: "#c56cf0" };
+    if (r < 0.16 + wave * 0.015 && wave >= 2) {
+      e = { type: "tank", spr: "octo", w: 70, h: 46, hp: 16 + wave * 5, speed: 26 + wave * 1.5, score: 500, cost: 10, xp: 8, color: "#c56cf0" };
     } else if (r < 0.35 && wave >= 2) {
       e = { type: "fast", spr: "squid", w: 28, h: 24, hp: 1 + Math.floor(wave * 0.5), speed: 100 + wave * 6, score: 150, cost: 1, xp: 2, color: "#ff9f43" };
     } else {
@@ -1356,8 +1356,8 @@
     const cx = (leaderX - W / 2) * 0.25;
     const sx = shake > 0 ? (Math.random() - 0.5) * shake * 0.9 : 0;
     const sy = shake > 0 ? (Math.random() - 0.5) * shake * 0.9 : 0;
-    camera.position.set(cx + sx, 660 + sy, 430);
-    camera.lookAt(cx, 0, -335);
+    camera.position.set(cx + sx, 660 + sy, 370);
+    camera.lookAt(cx, 0, -395);
     camera.updateMatrixWorld();
     billboardQuat.copy(camera.quaternion);
   }
